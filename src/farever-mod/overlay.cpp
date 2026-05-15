@@ -75,8 +75,14 @@ struct Overlay {
 Overlay           g_overlay;
 std::atomic<bool> g_in_render{false};
 
-// Panic switch (F10) plus auto-disable on repeated fence stalls.
-std::atomic<bool> g_overlay_enabled{true};
+// Per-window visibility toggles (user keys). The overall panic switch
+// (auto-disable on GPU stalls) is kept as a separate fail-safe via
+// g_overlay_enabled — if a wedged queue forces us off, the user can't
+// re-enable just one window because the whole submission path is
+// short-circuited.
+std::atomic<bool> g_overlay_enabled{true};  // panic / auto-disable
+std::atomic<bool> g_dps_visible{true};      // F10
+std::atomic<bool> g_minimap_visible{true};  // F8
 constexpr int kFenceTimeoutMs        = 50;
 constexpr int kAutoDisableSlowFrames = 30;
 int g_consecutive_slow_frames = 0;
@@ -450,6 +456,7 @@ void render_compass(const HeroSnapshot& h) {
 }
 
 void render_minimap_window() {
+    if (!g_minimap_visible.load()) return;
     calib_maybe_reload();
     HeroSnapshot h = hero_state_read();
 
@@ -524,18 +531,25 @@ void render_minimap_window() {
 }
 
 LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    // F10 panic toggle + F9 reset. F10 also arrives as WM_SYSKEYDOWN
-    // because Windows treats it as a system key.
-    auto is_press = [lp](){ return (lp & (1u << 30)) == 0; };
+    auto is_press = [lp]() { return (lp & (1u << 30)) == 0; };
+
+    // F10 → DPS meter on/off. (Arrives as WM_SYSKEYDOWN too because
+    // Windows treats it as a system key.)
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) &&
         wp == VK_F10 && is_press()) {
-        bool now_enabled = !g_overlay_enabled.load();
-        g_overlay_enabled.store(now_enabled);
-        g_consecutive_slow_frames = 0;
-        logf("overlay: F10 toggle -> %s",
-             now_enabled ? "ENABLED" : "DISABLED");
+        bool now = !g_dps_visible.load();
+        g_dps_visible.store(now);
+        logf("overlay: F10 DPS -> %s", now ? "VISIBLE" : "HIDDEN");
         return 0;
     }
+    // F8 → minimap on/off (historical key from minimap-dll).
+    if (msg == WM_KEYDOWN && wp == VK_F8 && is_press()) {
+        bool now = !g_minimap_visible.load();
+        g_minimap_visible.store(now);
+        logf("overlay: F8 minimap -> %s", now ? "VISIBLE" : "HIDDEN");
+        return 0;
+    }
+    // F9 → reset the current DPS pull.
     if (msg == WM_KEYDOWN && wp == VK_F9 && is_press()) {
         aggregator_reset();
         return 0;
@@ -762,9 +776,10 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
 }
 
 void render_imgui_window() {
-    // The aggregator's events come from damage_drain. Pull them and
-    // refresh the snapshot every frame.
+    // The aggregator runs unconditionally — pulls drain damage events
+    // every frame so totals stay correct even with the window hidden.
     aggregator_tick();
+    if (!g_dps_visible.load()) return;
     AggSnapshot snap = aggregator_snapshot();
 
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
@@ -784,9 +799,10 @@ void render_imgui_window() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
 
-    ImGui::Begin("DPS Meter", nullptr,
-                 ImGuiWindowFlags_NoCollapse |
-                 ImGuiWindowFlags_NoScrollbar);
+    // No NoCollapse flag: ImGui's title-bar collapse arrow lets the
+    // user shrink the window to just the title bar by clicking the
+    // triangle next to "DPS Meter".
+    ImGui::Begin("DPS Meter", nullptr, ImGuiWindowFlags_NoScrollbar);
 
     if (!snap.have_fight) {
         ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.5f, 1.0f),
@@ -857,7 +873,7 @@ void render_imgui_window() {
     DamageStats st = damage_stats();
     ImGui::Text("damage source: %llu allocs, %llu events, "
                 "%llu dropped(uninit), %llu dropped(garbage)   "
-                "F10 hide / F9 reset",
+                "F10 DPS / F8 map / F9 reset",
                 static_cast<unsigned long long>(st.allocs_seen),
                 static_cast<unsigned long long>(st.events_emitted),
                 static_cast<unsigned long long>(st.dropped_uninit),
