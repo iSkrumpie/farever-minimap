@@ -18,6 +18,7 @@
 #include "damage_scan.h"
 #include "mem_scan.h"
 #include "type_anchor.h"
+#include "hero_state.h"
 #include "log.h"
 
 #include <windows.h>
@@ -229,6 +230,23 @@ void sleep_chunked(int ms) {
 
 void thread_main() {
     logf("damage_scan: thread starting");
+
+    // 0) Wait for hero_state to lock before starting the anchor scan.
+    //    Both routines do full-heap passes; running them back-to-back is
+    //    roughly twice as fast as in parallel because they're memory-
+    //    bandwidth bound. hero_state has the bidirectional Player.isMe
+    //    check that lets it short-circuit per candidate — let it finish
+    //    first, then the anchor gets the full bandwidth.
+    int waited = 0;
+    while (g_running.load(std::memory_order_acquire) &&
+           !hero_state_locked() && !hero_state_failed()) {
+        sleep_chunked(200);
+        waited += 200;
+        if (waited % 5000 == 0) {
+            logf("damage_scan: waiting on hero_state lock (%d ms)", waited);
+        }
+    }
+    if (!g_running.load(std::memory_order_acquire)) return;
 
     // 1) Anchor — retry every 5 s until the world is loaded.
     std::uintptr_t tag = 0;

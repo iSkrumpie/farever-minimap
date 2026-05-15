@@ -79,17 +79,29 @@ constexpr ImU32 kColHeader      = IM_COL32(255, 220, 130, 255);
 // --- WndProc chain --------------------------------------------------
 
 LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_KEYDOWN && wp == VK_F8 && (lp & (1u << 30)) == 0) {
+    // F10 panic toggle and F9 reset. F8 is already minimap-dll's panic
+    // toggle; using distinct keys lets both overlays be controlled
+    // independently when injected side-by-side.
+    if (msg == WM_KEYDOWN && wp == VK_F10 && (lp & (1u << 30)) == 0) {
         bool now_enabled = !g_overlay_enabled.load();
         g_overlay_enabled.store(now_enabled);
         g_consecutive_slow_frames = 0;
-        logf("overlay: F8 toggle -> %s",
+        logf("overlay: F10 toggle -> %s",
              now_enabled ? "ENABLED" : "DISABLED");
         return 0;
     }
     if (msg == WM_KEYDOWN && wp == VK_F9 && (lp & (1u << 30)) == 0) {
         aggregator_reset();
         logf("overlay: F9 -> manual fight reset");
+        return 0;
+    }
+    // F10 can also trigger WM_SYSKEYDOWN on Windows (menu activation).
+    if (msg == WM_SYSKEYDOWN && wp == VK_F10 && (lp & (1u << 30)) == 0) {
+        bool now_enabled = !g_overlay_enabled.load();
+        g_overlay_enabled.store(now_enabled);
+        g_consecutive_slow_frames = 0;
+        logf("overlay: F10 (sys) toggle -> %s",
+             now_enabled ? "ENABLED" : "DISABLED");
         return 0;
     }
 
@@ -408,7 +420,7 @@ void render_imgui_window() {
     // Footer.
     ScanStats st = damage_scan_stats();
     ImGui::Text("scan: %lu polls, last %u ms, hot=%u, DRs=%llu  "
-                "tag=0x%llx   F8 hide / F9 reset",
+                "tag=0x%llx   F10 hide / F9 reset",
                 static_cast<unsigned long>(st.poll_count),
                 st.last_scan_ms, st.hot_regions,
                 static_cast<unsigned long long>(st.unique_drs),
