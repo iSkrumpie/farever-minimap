@@ -320,6 +320,10 @@ struct Calibration {
     float world_to_full_x_offset = 4096.0f;
     float world_to_full_y_offset = 6144.0f;
     bool  flip_y                 = true;
+    // View zoom: 1.0 shows the full mosaic, 19.0 shows ~1/19 of it
+    // centered on the player. Player-centered crop is clamped near the
+    // world edges so the image stays in-bounds.
+    float zoom                   = 1.0f;
 };
 Calibration g_calib;
 
@@ -383,13 +387,16 @@ void calib_maybe_reload() {
     if (calib_extract_double(text, "scale_y",  v)) c.world_to_full_y_scale  = static_cast<float>(v);
     if (calib_extract_double(text, "offset_x", v)) c.world_to_full_x_offset = static_cast<float>(v);
     if (calib_extract_double(text, "offset_y", v)) c.world_to_full_y_offset = static_cast<float>(v);
+    if (calib_extract_double(text, "zoom",     v)) c.zoom                   = static_cast<float>(v);
     calib_extract_bool(text, "flip_y", c.flip_y);
+    if (c.zoom < 1.0f)   c.zoom = 1.0f;
+    if (c.zoom > 64.0f)  c.zoom = 64.0f;
     g_calib = c;
     logf("overlay: calibration reloaded "
-         "(scale=%.3f,%.3f offset=%.1f,%.1f flip_y=%d)",
+         "(scale=%.3f,%.3f offset=%.1f,%.1f flip_y=%d zoom=%.2f)",
          c.world_to_full_x_scale,  c.world_to_full_y_scale,
          c.world_to_full_x_offset, c.world_to_full_y_offset,
-         static_cast<int>(c.flip_y));
+         static_cast<int>(c.flip_y), c.zoom);
 }
 
 // Image we render is 512x512, mosaic full is 11264x11264 (preview is
@@ -397,15 +404,49 @@ void calib_maybe_reload() {
 constexpr float kImageSizePx = 512.0f;
 constexpr float kFullMosaicPx = 11264.0f;
 
-ImVec2 world_to_image(double world_x, double world_y) {
+ImVec2 world_to_full(double world_x, double world_y) {
     float full_x = static_cast<float>(world_x) * g_calib.world_to_full_x_scale
                    + g_calib.world_to_full_x_offset;
     float full_y = static_cast<float>(world_y) * g_calib.world_to_full_y_scale
                    + g_calib.world_to_full_y_offset;
     if (g_calib.flip_y) full_y = kFullMosaicPx - full_y;
-    float u = full_x / kFullMosaicPx;
-    float v = full_y / kFullMosaicPx;
-    return ImVec2(u * kImageSizePx, v * kImageSizePx);
+    return ImVec2(full_x, full_y);
+}
+
+struct ViewUV {
+    ImVec2 uv0;        // top-left UV of the image we render
+    ImVec2 uv1;        // bottom-right UV
+};
+
+// Compute the player-centered crop of the mosaic at current zoom, with
+// edge clamping so the UV rectangle stays within [0, 1].
+ViewUV compute_view_uv(double world_x, double world_y, bool have_player) {
+    float vsize = 1.0f / g_calib.zoom;
+    if (vsize >= 1.0f || !have_player) {
+        return ViewUV{ImVec2(0, 0), ImVec2(1, 1)};
+    }
+    ImVec2 full = world_to_full(world_x, world_y);
+    float cu = full.x / kFullMosaicPx;
+    float cv = full.y / kFullMosaicPx;
+    float half = vsize * 0.5f;
+    if (cu < half)        cu = half;
+    if (cu > 1.0f - half) cu = 1.0f - half;
+    if (cv < half)        cv = half;
+    if (cv > 1.0f - half) cv = 1.0f - half;
+    return ViewUV{
+        ImVec2(cu - half, cv - half),
+        ImVec2(cu + half, cv + half),
+    };
+}
+
+// Player position on the rendered 512x512 image given the view crop.
+ImVec2 player_to_screen(double world_x, double world_y, const ViewUV& view) {
+    ImVec2 full = world_to_full(world_x, world_y);
+    float u = full.x / kFullMosaicPx;
+    float v = full.y / kFullMosaicPx;
+    float sx = (u - view.uv0.x) / (view.uv1.x - view.uv0.x) * kImageSizePx;
+    float sy = (v - view.uv0.y) / (view.uv1.y - view.uv0.y) * kImageSizePx;
+    return ImVec2(sx, sy);
 }
 
 void render_imgui_window() {
@@ -425,12 +466,13 @@ void render_imgui_window() {
 
     if (g_overlay.mosaic.resource) {
         ImVec2 image_size(kImageSizePx, kImageSizePx);
+        ViewUV view = compute_view_uv(lp.x, lp.y, lp.valid);
         ImGui::Image(static_cast<ImTextureID>(g_overlay.mosaic.srv_gpu.ptr),
-                     image_size);
+                     image_size, view.uv0, view.uv1);
         ImVec2 image_min = ImGui::GetItemRectMin();
 
         if (lp.valid) {
-            ImVec2 dot = world_to_image(lp.x, lp.y);
+            ImVec2 dot = player_to_screen(lp.x, lp.y, view);
             ImVec2 abs_dot(image_min.x + dot.x, image_min.y + dot.y);
             auto* dl = ImGui::GetWindowDrawList();
             float r = 5.0f;
@@ -453,12 +495,13 @@ void render_imgui_window() {
         ImGui::Text("offset_x = %.1f", g_calib.world_to_full_x_offset);
         ImGui::Text("offset_y = %.1f", g_calib.world_to_full_y_offset);
         ImGui::Text("flip_y   = %s", g_calib.flip_y ? "true" : "false");
+        ImGui::Text("zoom     = %.2fx", g_calib.zoom);
         ImGui::TextDisabled("edit research/minimap_calibration.json");
         ImGui::TextDisabled("(hot-reloads automatically)");
         if (lp.valid && g_overlay.mosaic.resource) {
-            ImVec2 dot = world_to_image(lp.x, lp.y);
-            ImGui::Text("image px = (%.1f, %.1f) of %.0f", dot.x, dot.y,
-                        kImageSizePx);
+            ImVec2 full = world_to_full(lp.x, lp.y);
+            ImGui::Text("full px  = (%.1f, %.1f) of %.0f", full.x, full.y,
+                        kFullMosaicPx);
         }
     }
 

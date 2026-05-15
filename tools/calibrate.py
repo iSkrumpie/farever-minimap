@@ -55,7 +55,12 @@ DEFAULT_CALIB = {
     "offset_x": 4096.0,
     "offset_y": 6144.0,
     "flip_y":   True,
+    "zoom":     1.0,
 }
+
+# Keys this tool actively fits. Anything else in the JSON (e.g. future
+# overlay-only fields) is preserved verbatim on save.
+FIT_KEYS = ("scale_x", "scale_y", "offset_x", "offset_y", "flip_y")
 
 
 def load_calib() -> dict:
@@ -70,9 +75,19 @@ def load_calib() -> dict:
 
 
 def save_calib(c: dict) -> None:
+    # Round-trip the existing file so we preserve fields this tool
+    # doesn't manage (zoom, future overlay-only settings, ...).
+    existing: dict = {}
+    if CALIB_FILE.exists():
+        try:
+            existing = json.loads(CALIB_FILE.read_text())
+        except Exception:
+            existing = {}
+    existing.pop("_comment", None)
+    existing.update({k: c[k] for k in FIT_KEYS if k in c})
     out = {"_comment": "Auto-fitted by tools/calibrate.py. "
                        "DLL hot-reloads on mtime change."}
-    out.update(c)
+    out.update(existing)
     CALIB_FILE.write_text(json.dumps(out, indent=2))
 
 
