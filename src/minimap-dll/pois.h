@@ -30,4 +30,16 @@ PoiStyle pois_style(const PoiRow& p);
 void pois_draw_marker(ImDrawList* dl, ImVec2 pos, PoiStyle style,
                       float size);
 
+// Atlas sprite location: returns true and fills uv0/uv1 in [0,1] with
+// the icon's region inside the activities atlas (8 cols x 2 rows).
+// Returns false for POI kinds we don't have an icon for (caller should
+// fall back to the geometric marker).
+bool pois_atlas_uv(const PoiRow& p, ImVec2& uv0, ImVec2& uv1);
+
+// Draw a POI icon from the activities-atlas at `pos`, sized to `size`
+// (half-extent). `atlas_srv` is the ImTextureID-castable GPU SRV
+// handle.
+void pois_draw_atlas(ImDrawList* dl, ImTextureID atlas_srv, ImVec2 pos,
+                     const ImVec2& uv0, const ImVec2& uv1, float size);
+
 }  // namespace farevermod

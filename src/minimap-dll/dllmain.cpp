@@ -14,7 +14,7 @@
 // in-game overlay rendering goes into a separate translation unit.
 
 #include "log.h"
-#include "live_position.h"
+#include "hero_scan.h"
 #include "d3d12_hook.h"
 #include "overlay.h"
 
@@ -36,7 +36,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             DisableThreadLibraryCalls(module);
             fmv::log_open();
             fmv::logf("DllMain ATTACH, PID=%lu", GetCurrentProcessId());
-            fmv::live_position_start();
+            fmv::hero_scan_start();
             HANDLE t = CreateThread(nullptr, 0, hook_install_thread,
                                     nullptr, 0, nullptr);
             if (t) CloseHandle(t);
@@ -45,7 +45,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
         case DLL_PROCESS_DETACH:
             fmv::overlay_shutdown();
             fmv::d3d12_hook_uninstall();
-            fmv::live_position_stop();
+            fmv::hero_scan_stop();
             fmv::log_line("DllMain DETACH");
             fmv::log_close();
             break;

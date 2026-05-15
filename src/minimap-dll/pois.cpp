@@ -165,6 +165,57 @@ bool pois_load(const wchar_t* path) {
 
 const std::vector<PoiRow>& pois_get() { return g_pois; }
 
+// Atlas layout: UI/icons/activities.png is an 8x2 grid of diamond
+// icons. Mapping inferred visually from the extracted sprite sheet —
+// some assignments (TimerCollectRun, WorldPlant) are best-guess until
+// we cross-check with the in-game world map.
+struct AtlasIdx { int col; int row; };
+
+AtlasIdx atlas_index_for(const PoiRow& p) {
+    // Mapping verified against the in-game atlas:
+    //   row 0:  skull, orb-chest, dungeon, weapon-swords, obelisk-tower,
+    //           respawn (Wiedereinstieg), <unused>, <unused>
+    //   row 1:  <unused>, jump-and-run, normal-chest, grey-?, grey-!,
+    //           green-!, orange-!, green-check
+    // Items the player hasn't seen in-game yet ((6-7,0), (0,1), (6-7,1))
+    // are left out — they may correspond to event/seasonal POI types we
+    // don't currently identify.
+    auto eq = [](const char* a, const char* b) { return std::strcmp(a, b) == 0; };
+    if (eq(p.kind, "obelisk"))  return { 4, 0 };  // tower
+    if (eq(p.kind, "respawn"))  return { 5, 0 };  // Wiedereinstieg
+    if (eq(p.kind, "dungeon"))  return { 2, 0 };  // dungeon
+    if (eq(p.kind, "merchant")) return { 7, 0 };  // orange speech bubble
+    if (eq(p.kind, "activity")) {
+        if (eq(p.subkind, "WorldElite"))      return { 0, 0 };  // skull
+        if (eq(p.subkind, "FightStone"))      return { 2, 1 };  // chest
+        if (eq(p.subkind, "ChestOrb"))        return { 1, 0 };  // orb chest
+        if (eq(p.subkind, "Ascension"))       return { 1, 1 };  // d-pad
+        if (eq(p.subkind, "MountRush"))       return { 0, 1 };  // blue seal
+        if (eq(p.subkind, "TimerCollectRun")) return { 0, 1 };  // blue seal
+        if (eq(p.subkind, "WorldCamp"))       return { 7, 0 };  // orange chat
+        if (eq(p.subkind, "WorldPlant"))      return { 7, 0 };  // orange chat
+    }
+    return { -1, -1 };
+}
+
+bool pois_atlas_uv(const PoiRow& p, ImVec2& uv0, ImVec2& uv1) {
+    AtlasIdx ix = atlas_index_for(p);
+    if (ix.col < 0) return false;
+    // Atlas: 1024x384, 128x128 cells -> 8 cols x 3 rows.
+    const float cw = 128.0f / 1024.0f;
+    const float ch = 128.0f /  384.0f;
+    uv0 = ImVec2(ix.col * cw, ix.row * ch);
+    uv1 = ImVec2(uv0.x + cw,  uv0.y + ch);
+    return true;
+}
+
+void pois_draw_atlas(ImDrawList* dl, ImTextureID tex, ImVec2 pos,
+                     const ImVec2& uv0, const ImVec2& uv1, float size) {
+    ImVec2 a(pos.x - size, pos.y - size);
+    ImVec2 b(pos.x + size, pos.y + size);
+    dl->AddImage(tex, a, b, uv0, uv1);
+}
+
 PoiStyle pois_style(const PoiRow& p) {
     auto eq = [](const char* a, const char* b) { return std::strcmp(a, b) == 0; };
     if (eq(p.kind, "obelisk"))  return {IM_COL32(120, 220, 255, 255), 3};

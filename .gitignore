@@ -11,6 +11,7 @@ research/live_position.json.tmp
 research/fow_state.json
 research/maps/*.png
 research/maps/*.json
+research/icons/
 minimap.log
 
 # Tools we download into the project / non-source artifacts in tools/

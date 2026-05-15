@@ -36,10 +36,11 @@ MAP_PAK  = GAME_DIR / "res.map.pak"
 # `name` field is often unique per instance like "RespawnPoint_7"; the
 # `source` always points at a fixed prefab path).
 REFERENCE_KINDS = [
-    ("Gameplay/Elements/Obelisk.prefab",      "obelisk"),
-    ("Gameplay/Elements/RespawnPoint.prefab", "respawn"),
-    ("Gameplay/Elements/RespawnZone.prefab",  "respawn_zone"),
-    ("/WanderingMerchant.prefab",             "merchant"),
+    ("Gameplay/Elements/Obelisk.prefab",                "obelisk"),
+    ("Gameplay/Elements/RespawnPoint.prefab",           "respawn"),
+    ("Gameplay/Elements/RespawnZone.prefab",            "respawn_zone"),
+    ("/WanderingMerchant.prefab",                       "merchant"),
+    ("Gameplay/Prefabs/GameplayBase/InstanceOrb.prefab", "dungeon"),
 ]
 
 
@@ -68,11 +69,16 @@ def collect_from_node(node: dict, tile: str, out: list[dict]) -> None:
     if node_type == "reference" and x is not None and y is not None:
         kind = reference_kind(src)
         if kind is not None:
+            # Dungeons carry their target instance under props.props.
+            ref_props = (node.get("props") or {}).get("props") or {}
+            target = ref_props.get("targetActivity")
+            row_name = target or name
+            row_id   = (node.get("props") or {}).get("id")
             out.append({
                 "kind":     kind,
                 "subkind":  None,
-                "name":     name,
-                "id":       None,
+                "name":     row_name,
+                "id":       row_id,
                 "x":        float(x),
                 "y":        float(y),
                 "z":        float(z) if z is not None else 0.0,

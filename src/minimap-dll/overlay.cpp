@@ -15,7 +15,7 @@
 
 #include "overlay.h"
 #include "log.h"
-#include "live_position.h"
+#include "hero_scan.h"
 #include "textures.h"
 #include "pois.h"
 
@@ -82,6 +82,8 @@ struct Overlay {
     DXGI_FORMAT                 rt_format = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     LoadedTexture               mosaic{};
+    LoadedTexture               poi_atlas{};
+    LoadedTexture               player_arrow{};
 };
 
 Overlay g_overlay;
@@ -330,6 +332,21 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
 
     pois_load(L"D:\\farevermod\\research\\pois_W1_Siagarta.json");
 
+    // SRV slot 2 = POI activity icon atlas. Used by pois_draw_atlas.
+    if (!load_texture_from_file(
+            g_overlay.device, g_overlay.srv_heap, 2,
+            L"D:\\farevermod\\research\\icons\\activities.png",
+            &g_overlay.poi_atlas)) {
+        logf("overlay: poi atlas load failed; falling back to shapes");
+    }
+    // SRV slot 3 = player arrow, rotated by yaw at the player position.
+    if (!load_texture_from_file(
+            g_overlay.device, g_overlay.srv_heap, 3,
+            L"D:\\farevermod\\research\\icons\\PlayerMapArrow.png",
+            &g_overlay.player_arrow)) {
+        logf("overlay: player arrow load failed; falling back to dot");
+    }
+
     logf("overlay: DX12+ImGui init OK (hwnd=%p, buffers=%u, fmt=%d, queue=%p)",
          g_overlay.hwnd, g_overlay.back_buffer_count,
          static_cast<int>(g_overlay.rt_format), static_cast<void*>(queue));
@@ -439,6 +456,26 @@ constexpr float kCompassSizes[3] = { 256.0f, 384.0f, 512.0f };
 int g_compass_size_idx = 2;   // start at largest
 
 float compass_size_px() { return kCompassSizes[g_compass_size_idx]; }
+
+struct PoiFilter {
+    bool obelisks  = true;
+    bool respawns  = true;
+    bool merchants = true;
+    bool dungeons  = true;
+    bool activities = true;
+};
+PoiFilter g_filter;
+bool g_filter_open = false;
+bool g_compass_collapsed = false;
+
+bool poi_passes_filter(const PoiRow& p) {
+    if (std::strcmp(p.kind, "obelisk")  == 0) return g_filter.obelisks;
+    if (std::strcmp(p.kind, "respawn")  == 0) return g_filter.respawns;
+    if (std::strcmp(p.kind, "merchant") == 0) return g_filter.merchants;
+    if (std::strcmp(p.kind, "dungeon")  == 0) return g_filter.dungeons;
+    if (std::strcmp(p.kind, "activity") == 0) return g_filter.activities;
+    return true;
+}
 
 ImVec2 world_to_full(double world_x, double world_y) {
     float full_x = static_cast<float>(world_x) * g_calib.world_to_full_x_scale
@@ -570,6 +607,89 @@ void bezel_draw_size(ImDrawList* dl, const BezelButton& b, int size_idx) {
                 kColIcon, 1.0f, 0, 1.8f);
 }
 
+// Minus-in-circle: clear "collapse" hint for a minimize control.
+void bezel_draw_collapse(ImDrawList* dl, const BezelButton& b) {
+    bezel_draw_circle_base(dl, b);
+    float arm = b.radius * 0.5f;
+    dl->AddLine(ImVec2(b.center.x - arm, b.center.y),
+                ImVec2(b.center.x + arm, b.center.y),
+                kColIcon, 2.5f);
+}
+
+// Funnel glyph: stylised filter funnel. Outline-only so it reads at 14 px.
+void bezel_draw_filter(ImDrawList* dl, const BezelButton& b, bool active) {
+    bezel_draw_circle_base(dl, b);
+    ImU32 c = active ? IM_COL32(255, 255, 200, 255) : kColIcon;
+    float w = 5.0f;
+    float h = 6.0f;
+    ImVec2 tl(b.center.x - w, b.center.y - h);
+    ImVec2 tr(b.center.x + w, b.center.y - h);
+    ImVec2 nl(b.center.x - 1.5f, b.center.y + 1.0f);
+    ImVec2 nr(b.center.x + 1.5f, b.center.y + 1.0f);
+    ImVec2 sb(b.center.x,         b.center.y + h);
+    dl->AddLine(tl, tr, c, 1.8f);
+    dl->AddLine(tl, nl, c, 1.8f);
+    dl->AddLine(tr, nr, c, 1.8f);
+    dl->AddLine(ImVec2(nl.x, nl.y), ImVec2(nl.x + 1.5f, sb.y), c, 1.8f);
+    dl->AddLine(ImVec2(nr.x, nr.y), ImVec2(nr.x - 1.5f, sb.y), c, 1.8f);
+}
+
+// Draws a small WoW-bezel-style "stone tablet" beneath the compass:
+// gold rounded rect with a status label and (while still scanning) an
+// animated dash spinner. The whole thing is drawn purely on the
+// window draw list so it doesn't disturb ImGui layout.
+void render_status_panel(ImDrawList* dl, ImVec2 anchor_top_left,
+                         float panel_width, const char* msg, bool spinning) {
+    const float pad_h = 10.0f;
+    const float pad_v = 6.0f;
+    const float spinner_r = spinning ? 8.0f : 0.0f;
+    const float gap = spinning ? 8.0f : 0.0f;
+
+    ImVec2 ts = ImGui::CalcTextSize(msg);
+    float content_w = (spinner_r * 2.0f) + gap + ts.x;
+    float box_w = std::max(panel_width, content_w + pad_h * 2.0f);
+    float box_h = std::max(ts.y, spinner_r * 2.0f) + pad_v * 2.0f;
+
+    ImVec2 box_min = anchor_top_left;
+    ImVec2 box_max(box_min.x + box_w, box_min.y + box_h);
+
+    dl->AddRectFilled(box_min, box_max, kColBtnFill, 8.0f);
+    dl->AddRect      (box_min, box_max, kColBezel,   8.0f, 0, 2.0f);
+    dl->AddRect      (ImVec2(box_min.x + 1.5f, box_min.y + 1.5f),
+                      ImVec2(box_max.x - 1.5f, box_max.y - 1.5f),
+                      kColBezelShadow, 7.0f, 0, 1.0f);
+
+    float center_y = (box_min.y + box_max.y) * 0.5f;
+    float cursor_x = box_min.x + (box_w - content_w) * 0.5f;
+
+    if (spinning) {
+        ImVec2 sc(cursor_x + spinner_r, center_y);
+        // 8 ticks, the one near the head fully bright, others fade
+        // around the loop. Drives the rotation off ImGui::GetTime().
+        const int n = 8;
+        const float two_pi = 6.2831853f;
+        float t = ImGui::GetTime();
+        float head = std::fmod(t * 2.0f, 1.0f) * n;   // 2 rev/sec
+        for (int i = 0; i < n; ++i) {
+            float a = (i / float(n)) * two_pi - two_pi * 0.25f;
+            float c0 = cosf(a);
+            float s0 = sinf(a);
+            ImVec2 p_in (sc.x + c0 * (spinner_r * 0.45f),
+                         sc.y + s0 * (spinner_r * 0.45f));
+            ImVec2 p_out(sc.x + c0 * spinner_r,
+                         sc.y + s0 * spinner_r);
+            float d = std::fmod(head - i + n, float(n)) / n;
+            float alpha = 0.15f + 0.85f * (1.0f - d);
+            ImU32 col = IM_COL32(255, 220, 130,
+                                  static_cast<int>(alpha * 255.0f));
+            dl->AddLine(p_in, p_out, col, 2.0f);
+        }
+        cursor_x += spinner_r * 2.0f + gap;
+    }
+    ImVec2 tp(cursor_x, center_y - ts.y * 0.5f);
+    dl->AddText(tp, IM_COL32(255, 230, 180, 255), msg);
+}
+
 void render_compass(const LivePosition& lp) {
     constexpr float kPi = 3.14159265358979323846f;
     const float size = compass_size_px();
@@ -588,10 +708,12 @@ void render_compass(const LivePosition& lp) {
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##compass_body", ImVec2(size, size));
 
-    BezelButton pin   = bezel_hit("##pin",        center, r, -kPi * 0.32f, btn_r);
-    BezelButton sizeb = bezel_hit("##size_cycle", center, r, -kPi * 0.20f, btn_r);
-    BezelButton plus  = bezel_hit("##zoom_plus",  center, r,  kPi * 0.20f, btn_r);
-    BezelButton minus = bezel_hit("##zoom_minus", center, r,  kPi * 0.32f, btn_r);
+    BezelButton pin      = bezel_hit("##pin",        center, r, -kPi * 0.32f, btn_r);
+    BezelButton sizeb    = bezel_hit("##size_cycle", center, r, -kPi * 0.20f, btn_r);
+    BezelButton collapse = bezel_hit("##collapse",   center, r, -kPi * 0.50f, btn_r);
+    BezelButton filter   = bezel_hit("##filter",     center, r,  kPi * 1.20f, btn_r);
+    BezelButton plus     = bezel_hit("##zoom_plus",  center, r,  kPi * 0.20f, btn_r);
+    BezelButton minus    = bezel_hit("##zoom_minus", center, r,  kPi * 0.32f, btn_r);
 
     // === DRAWING (DrawList is z-ordered by call sequence) ===
     auto* dl = ImGui::GetWindowDrawList();
@@ -618,36 +740,117 @@ void render_compass(const LivePosition& lp) {
         const auto& pois = pois_get();
         const float clip_r = r - 4.0f;
         const float clip_r2 = clip_r * clip_r;
-        const float marker_size =
-            (size <= 256.0f) ? 3.0f : (size <= 384.0f) ? 3.5f : 4.0f;
+        // Atlas icons are diamond-shaped in 128² cells. ~9-12 px on
+        // screen reads well at all three compass sizes.
+        const float icon_size =
+            (size <= 256.0f) ? 9.0f : (size <= 384.0f) ? 11.0f : 13.0f;
+        const float shape_size = icon_size * 0.45f;
+        ImTextureID atlas_tex = g_overlay.poi_atlas.resource
+            ? static_cast<ImTextureID>(g_overlay.poi_atlas.srv_gpu.ptr)
+            : (ImTextureID)0;
         for (const auto& poi : pois) {
+            if (!poi_passes_filter(poi)) continue;
             ImVec2 sp_local = player_to_screen(poi.x, poi.y, view, size);
             ImVec2 sp(p_min.x + sp_local.x, p_min.y + sp_local.y);
             float ddx = sp.x - center.x;
             float ddy = sp.y - center.y;
             if (ddx * ddx + ddy * ddy > clip_r2) continue;
-            PoiStyle st = pois_style(poi);
-            pois_draw_marker(dl, sp, st, marker_size);
+            ImVec2 uv0, uv1;
+            if (atlas_tex && pois_atlas_uv(poi, uv0, uv1)) {
+                pois_draw_atlas(dl, atlas_tex, sp, uv0, uv1, icon_size);
+            } else {
+                pois_draw_marker(dl, sp, pois_style(poi), shape_size);
+            }
         }
     }
 
-    if (lp.valid) {
+    if (!lp.valid) {
+        // Status tablet centered ON the compass disc. The spinner ticks
+        // while the scan is running; we stop spinning once it locks (=
+        // "reading position...") or fails.
+        const char* msg =
+            hero_scan_failed() ? "Local player not found" :
+            hero_scan_locked() ? "Reading position..."    :
+                                 "Scanning for player...";
+        bool spinning = !hero_scan_failed();
+        ImVec2 ts = ImGui::CalcTextSize(msg);
+        float spinner_r = spinning ? 8.0f : 0.0f;
+        float gap = spinning ? 8.0f : 0.0f;
+        float content_w = spinner_r * 2.0f + gap + ts.x;
+        float pad_h = 12.0f, pad_v = 7.0f;
+        float box_w = content_w + pad_h * 2.0f;
+        float box_h = std::max(ts.y, spinner_r * 2.0f) + pad_v * 2.0f;
+        ImVec2 box_min(center.x - box_w * 0.5f, center.y - box_h * 0.5f);
+        ImVec2 box_max(center.x + box_w * 0.5f, center.y + box_h * 0.5f);
+        dl->AddRectFilled(box_min, box_max, kColBtnFill, 8.0f);
+        dl->AddRect      (box_min, box_max, kColBezel,   8.0f, 0, 2.0f);
+        dl->AddRect      (ImVec2(box_min.x + 1.5f, box_min.y + 1.5f),
+                          ImVec2(box_max.x - 1.5f, box_max.y - 1.5f),
+                          kColBezelShadow, 7.0f, 0, 1.0f);
+
+        float cursor_x = box_min.x + pad_h;
+        if (spinning) {
+            ImVec2 sc(cursor_x + spinner_r, center.y);
+            const int   n      = 8;
+            const float two_pi = 6.2831853f;
+            float head = std::fmod(ImGui::GetTime() * 2.0f, 1.0f) * n;
+            for (int i = 0; i < n; ++i) {
+                float a  = (i / float(n)) * two_pi - two_pi * 0.25f;
+                float c0 = cosf(a), s0 = sinf(a);
+                ImVec2 p_in (sc.x + c0 * (spinner_r * 0.45f),
+                             sc.y + s0 * (spinner_r * 0.45f));
+                ImVec2 p_out(sc.x + c0 * spinner_r,
+                             sc.y + s0 * spinner_r);
+                float d     = std::fmod(head - i + n, float(n)) / n;
+                float alpha = 0.15f + 0.85f * (1.0f - d);
+                ImU32 col   = IM_COL32(255, 220, 130,
+                                       static_cast<int>(alpha * 255.0f));
+                dl->AddLine(p_in, p_out, col, 2.0f);
+            }
+            cursor_x += spinner_r * 2.0f + gap;
+        }
+        ImVec2 tp(cursor_x, center.y - ts.y * 0.5f);
+        dl->AddText(tp, IM_COL32(255, 230, 180, 255), msg);
+    } else {
         ImVec2 dot_local = player_to_screen(lp.x, lp.y, view, size);
         ImVec2 dot(p_min.x + dot_local.x, p_min.y + dot_local.y);
-        float dr = 5.0f;
         float c = cosf(static_cast<float>(lp.rot_z));
         float s = sinf(static_cast<float>(lp.rot_z));
-        dl->AddLine(dot, ImVec2(dot.x + c * 14.0f, dot.y + s * 14.0f),
-                    kColPlayer, 2.0f);
-        dl->AddCircleFilled(dot, dr,           kColPlayer, 16);
-        dl->AddCircle(dot, dr + 1.0f, kColBezelShadow, 16, 1.5f);
+
+        if (g_overlay.player_arrow.resource) {
+            // The PNG points right at yaw=0, matching the (cos, sin)
+            // convention. Rotate the unit square corners and submit
+            // them as a textured quad.
+            float arr_size = (size <= 256.0f) ? 9.0f
+                           : (size <= 384.0f) ? 11.0f : 13.0f;
+            auto rot = [&](float lx, float ly) {
+                return ImVec2(dot.x + lx * c - ly * s,
+                              dot.y + lx * s + ly * c);
+            };
+            ImVec2 p0 = rot(-arr_size, -arr_size);
+            ImVec2 p1 = rot( arr_size, -arr_size);
+            ImVec2 p2 = rot( arr_size,  arr_size);
+            ImVec2 p3 = rot(-arr_size,  arr_size);
+            dl->AddImageQuad(
+                static_cast<ImTextureID>(g_overlay.player_arrow.srv_gpu.ptr),
+                p0, p1, p2, p3,
+                ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1));
+        } else {
+            float dr = 5.0f;
+            dl->AddLine(dot, ImVec2(dot.x + c * 14.0f, dot.y + s * 14.0f),
+                        kColPlayer, 2.0f);
+            dl->AddCircleFilled(dot, dr,           kColPlayer, 16);
+            dl->AddCircle(dot, dr + 1.0f, kColBezelShadow, 16, 1.5f);
+        }
     }
 
     // Buttons on top.
-    bezel_draw_pin(dl,   pin);
-    bezel_draw_size(dl,  sizeb, g_compass_size_idx);
-    bezel_draw_plus(dl,  plus);
-    bezel_draw_minus(dl, minus);
+    bezel_draw_pin(dl,      pin);
+    bezel_draw_size(dl,     sizeb, g_compass_size_idx);
+    bezel_draw_collapse(dl, collapse);
+    bezel_draw_filter(dl,   filter, g_filter_open);
+    bezel_draw_plus(dl,     plus);
+    bezel_draw_minus(dl,    minus);
 
     // === ACTIONS ===
     if (plus.clicked)  {
@@ -660,6 +863,12 @@ void render_compass(const LivePosition& lp) {
     }
     if (sizeb.clicked) {
         g_compass_size_idx = (g_compass_size_idx + 1) % 3;
+    }
+    if (filter.clicked) {
+        g_filter_open = !g_filter_open;
+    }
+    if (collapse.clicked) {
+        g_compass_collapsed = true;
     }
     // Drag: while the pin button is held, move the window with mouse.
     if (pin.active) {
@@ -687,8 +896,84 @@ void render_imgui_window() {
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
     ImGui::Begin("minimap", nullptr, wflags);
 
-    LivePosition lp = live_position_get();
+    LivePosition lp = hero_scan_read();
+
+    if (g_compass_collapsed) {
+        // Tiny puck — click to re-expand, drag to move the window.
+        const float puck = 36.0f;
+        ImVec2 cp_min = ImGui::GetCursorScreenPos();
+        ImVec2 cp_max(cp_min.x + puck, cp_min.y + puck);
+        ImVec2 ccenter(cp_min.x + puck * 0.5f, cp_min.y + puck * 0.5f);
+        ImGui::InvisibleButton("##compass_puck", ImVec2(puck, puck));
+        bool active = ImGui::IsItemActive();
+        if (active) {
+            ImVec2 d = ImGui::GetIO().MouseDelta;
+            if (d.x != 0.0f || d.y != 0.0f) {
+                ImVec2 wp = ImGui::GetWindowPos();
+                ImGui::SetWindowPos(ImVec2(wp.x + d.x, wp.y + d.y));
+            }
+        }
+        // Treat as click only if the cursor barely moved during press.
+        if (ImGui::IsItemDeactivated()) {
+            ImVec2 dd = ImGui::GetMouseDragDelta(0);
+            if (std::fabs(dd.x) + std::fabs(dd.y) < 4.0f) {
+                g_compass_collapsed = false;
+            }
+        }
+        auto* dl = ImGui::GetWindowDrawList();
+        float r = puck * 0.5f;
+        dl->AddCircleFilled(ccenter, r, kColBtnFill, 32);
+        dl->AddCircle      (ccenter, r,        kColBezel,       32, 2.5f);
+        dl->AddCircle      (ccenter, r - 2.0f, kColBezelShadow, 32, 1.0f);
+        // Stylised "expand" glyph: small diamond.
+        float a = 5.0f;
+        ImVec2 d0(ccenter.x,     ccenter.y - a);
+        ImVec2 d1(ccenter.x + a, ccenter.y    );
+        ImVec2 d2(ccenter.x,     ccenter.y + a);
+        ImVec2 d3(ccenter.x - a, ccenter.y    );
+        dl->AddQuad(d0, d1, d2, d3, kColIcon, 1.8f);
+        ImGui::End();
+        ImGui::PopStyleVar();
+        return;
+    }
+
+    ImVec2 compass_top_left = ImGui::GetCursorScreenPos();
+    float  compass_size     = compass_size_px();
     render_compass(lp);
+
+    auto* dl = ImGui::GetWindowDrawList();
+    (void)compass_top_left; (void)compass_size; (void)dl;
+
+    if (g_filter_open) {
+        // WoW-bezel filter tablet: gold border, dark-stone fill,
+        // checkboxes restyled to match.
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,        kColBtnFill);
+        ImGui::PushStyleColor(ImGuiCol_Border,         kColBezel);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,        IM_COL32(22, 16,  8, 235));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(70, 52, 24, 245));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  IM_COL32(18, 12,  6, 255));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark,      kColIcon);
+        ImGui::PushStyleColor(ImGuiCol_Text,           IM_COL32(255, 230, 180, 255));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,  8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 2.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,   4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2(8, 6));
+        ImGui::BeginChild("##filter_tablet",
+                          ImVec2(0, 0),
+                          ImGuiChildFlags_AutoResizeX |
+                              ImGuiChildFlags_AutoResizeY |
+                              ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_NoScrollbar);
+        ImGui::Checkbox("Obelisks",   &g_filter.obelisks);
+        ImGui::Checkbox("Respawns",   &g_filter.respawns);
+        ImGui::Checkbox("Dungeons",   &g_filter.dungeons);
+        ImGui::Checkbox("Merchants",  &g_filter.merchants);
+        ImGui::Checkbox("Activities", &g_filter.activities);
+        ImGui::EndChild();
+        ImGui::PopStyleVar(4);
+        ImGui::PopStyleColor(7);
+    }
 
     ImGui::End();
     ImGui::PopStyleVar();
@@ -837,6 +1122,8 @@ void overlay_shutdown() {
         // Drain GPU before destroying anything it might still reference.
         for (auto& f : g_overlay.frames) wait_for_frame(f);
         release_texture(&g_overlay.mosaic);
+        release_texture(&g_overlay.poi_atlas);
+        release_texture(&g_overlay.player_arrow);
         ImGui_ImplDX12_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();

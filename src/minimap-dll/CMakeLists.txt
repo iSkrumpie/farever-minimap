@@ -1,7 +1,7 @@
 add_library(minimap SHARED
     dllmain.cpp
     log.cpp
-    live_position.cpp
+    hero_scan.cpp
     d3d12_hook.cpp
     overlay.cpp
     textures.cpp
