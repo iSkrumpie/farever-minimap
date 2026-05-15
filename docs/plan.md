@@ -79,9 +79,12 @@ zone naming scheme (`WorldW1Siagarta_*`).
 
 ### M4 — POIs
 
-Read the in-memory POI lists (game already tracks
-`FilterObelisks`, `FilterRespawnPoints`, etc. — see options.ini) and
-render them as marker sprites on top of the minimap.
+| Sub  | Result                                                                      |
+| ---- | --------------------------------------------------------------------------- |
+| M4.1 | ✅ `tools/extract_pois.py` parses `Level/World/<world>.dat/gameplayData/*.prefab` (plain JSON) inside `res.map.pak` → `research/pois_<world>.json`. 149 POIs for W1_Siagarta: 10 obelisks, 24 respawns, 3 merchants, 112 activities (WorldElite/FightStone/ChestOrb/…). |
+| M4.2 | ✅ DLL loads the JSON via a tiny hand-rolled parser (`pois.h/.cpp`) and renders coloured markers on the compass — diamond/cross/triangle/square/circle keyed off kind+subkind, circle-clipped to the bezel. |
+| M4.3 | ↻ Filter UI: toggle kinds on/off (Obelisk, Respawn, Activity sub-types). |
+| M4.4 | ↻ Dynamic POIs from in-memory player markers / active quest. |
 
 ## Risks
 

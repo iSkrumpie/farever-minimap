@@ -17,6 +17,7 @@
 #include "log.h"
 #include "live_position.h"
 #include "textures.h"
+#include "pois.h"
 
 #include <windows.h>
 #include <atomic>
@@ -327,6 +328,8 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
         logf("overlay: mosaic load failed; running without map background");
     }
 
+    pois_load(L"D:\\farevermod\\research\\pois_W1_Siagarta.json");
+
     logf("overlay: DX12+ImGui init OK (hwnd=%p, buffers=%u, fmt=%d, queue=%p)",
          g_overlay.hwnd, g_overlay.back_buffer_count,
          static_cast<int>(g_overlay.rt_format), static_cast<void*>(queue));
@@ -608,6 +611,25 @@ void render_compass(const LivePosition& lp) {
     dl->AddLine(ImVec2(center.x, p_min.y),
                 ImVec2(center.x, p_min.y + 10.0f),
                 kColNorth, 2.5f);
+
+    // POIs: clip to a disc just inside the bezel so markers don't ride
+    // on top of the ring. Marker size scales gently with compass size.
+    {
+        const auto& pois = pois_get();
+        const float clip_r = r - 4.0f;
+        const float clip_r2 = clip_r * clip_r;
+        const float marker_size =
+            (size <= 256.0f) ? 3.0f : (size <= 384.0f) ? 3.5f : 4.0f;
+        for (const auto& poi : pois) {
+            ImVec2 sp_local = player_to_screen(poi.x, poi.y, view, size);
+            ImVec2 sp(p_min.x + sp_local.x, p_min.y + sp_local.y);
+            float ddx = sp.x - center.x;
+            float ddy = sp.y - center.y;
+            if (ddx * ddx + ddy * ddy > clip_r2) continue;
+            PoiStyle st = pois_style(poi);
+            pois_draw_marker(dl, sp, st, marker_size);
+        }
+    }
 
     if (lp.valid) {
         ImVec2 dot_local = player_to_screen(lp.x, lp.y, view, size);

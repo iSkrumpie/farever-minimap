@@ -5,6 +5,7 @@ add_library(minimap SHARED
     d3d12_hook.cpp
     overlay.cpp
     textures.cpp
+    pois.cpp
 )
 
 target_link_libraries(minimap PRIVATE
