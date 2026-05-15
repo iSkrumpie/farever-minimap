@@ -20,6 +20,18 @@ struct LibHL {
     void* hl_alloc_array    = nullptr;
     void* hl_gc_dump_memory = nullptr;
 
+    // Thread registration for the GC. Any thread that reads HashLink
+    // heap pointers must be registered or the Boehm-style collector
+    // can race with it (stop-the-world signalling is per registered
+    // thread, and unregistered threads' stacks/registers aren't
+    // scanned as roots). Signatures:
+    //   void hl_register_thread(void* stack_top);
+    //   void hl_unregister_thread();
+    //   void hl_blocking(bool b);   // true=we're sleeping/I/O bound, GC can advance without us
+    void* hl_register_thread   = nullptr;
+    void* hl_unregister_thread = nullptr;
+    void* hl_blocking          = nullptr;
+
     void* libhl_base        = nullptr;   // HMODULE
 };
 

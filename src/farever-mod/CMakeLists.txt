@@ -6,6 +6,7 @@ add_library(farever_mod SHARED
     mem_scan.cpp
     type_anchor.cpp
     hl_hook.cpp
+    damage.cpp
     dinput8.def
 )
 

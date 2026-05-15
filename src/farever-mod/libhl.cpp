@@ -31,22 +31,31 @@ bool libhl_wait_and_resolve(LibHL* out) {
     logf("libhl: module base %p (after %lu ms)",
          static_cast<void*>(libhl), t_visible - t_start);
 
-    out->libhl_base        = libhl;
-    out->hl_alloc_obj      = reinterpret_cast<void*>(
+    out->libhl_base          = libhl;
+    out->hl_alloc_obj        = reinterpret_cast<void*>(
         GetProcAddress(libhl, "hl_alloc_obj"));
-    out->hl_alloc_dynamic  = reinterpret_cast<void*>(
+    out->hl_alloc_dynamic    = reinterpret_cast<void*>(
         GetProcAddress(libhl, "hl_alloc_dynamic"));
-    out->hl_alloc_dynobj   = reinterpret_cast<void*>(
+    out->hl_alloc_dynobj     = reinterpret_cast<void*>(
         GetProcAddress(libhl, "hl_alloc_dynobj"));
-    out->hl_alloc_array    = reinterpret_cast<void*>(
+    out->hl_alloc_array      = reinterpret_cast<void*>(
         GetProcAddress(libhl, "hl_alloc_array"));
-    out->hl_gc_dump_memory = reinterpret_cast<void*>(
+    out->hl_gc_dump_memory   = reinterpret_cast<void*>(
         GetProcAddress(libhl, "hl_gc_dump_memory"));
+    out->hl_register_thread  = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hl_register_thread"));
+    out->hl_unregister_thread = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hl_unregister_thread"));
+    out->hl_blocking         = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hl_blocking"));
 
     logf("libhl: hl_alloc_obj=%p hl_alloc_dynamic=%p hl_alloc_dynobj=%p "
-         "hl_alloc_array=%p hl_gc_dump_memory=%p",
+         "hl_alloc_array=%p hl_gc_dump_memory=%p "
+         "hl_register_thread=%p hl_unregister_thread=%p hl_blocking=%p",
          out->hl_alloc_obj, out->hl_alloc_dynamic, out->hl_alloc_dynobj,
-         out->hl_alloc_array, out->hl_gc_dump_memory);
+         out->hl_alloc_array, out->hl_gc_dump_memory,
+         out->hl_register_thread, out->hl_unregister_thread,
+         out->hl_blocking);
 
     if (!out->hl_alloc_obj) {
         logf("libhl: FATAL hl_alloc_obj not exported — wrong libhl version?");

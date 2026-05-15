@@ -17,6 +17,7 @@
 #include "dinput8_proxy.h"
 #include "libhl.h"
 #include "hl_hook.h"
+#include "damage.h"
 
 #include <windows.h>
 #include <atomic>
@@ -30,10 +31,7 @@ namespace {
 HMODULE   g_self = nullptr;
 fv::LibHL g_libhl{};
 
-// Smoke-test watcher: counts allocations of ent.Hero. Real consumer
-// modules (Hero state for the minimap, DamageDisplay for DPS) land in
-// follow-up commits. For now this just proves the hook + dispatcher
-// chain reaches real Haxe classes.
+// Smoke-test watcher: counts allocations of ent.Hero.
 std::atomic<std::uint64_t> g_hero_alloc_count{0};
 std::atomic<std::uintptr_t> g_first_hero{0};
 
@@ -50,6 +48,7 @@ void on_hero_alloc(std::uintptr_t obj) {
     }
 }
 
+
 DWORD WINAPI worker_thread(LPVOID) {
     fv::logf("worker: started");
     if (!fv::libhl_wait_and_resolve(&g_libhl)) {
@@ -59,11 +58,18 @@ DWORD WINAPI worker_thread(LPVOID) {
     // Register watchers BEFORE installing the hook so we don't miss
     // the very first allocations on the way out of probe_init.
     fv::hl_hook_register(L"ent.Hero", on_hero_alloc);
+    // damage_start() is OFF again — hl_register_thread + pump killed
+    // the game during early startup (before the first frame). The
+    // working configuration is: watchers fine, pump thread off. Next
+    // diagnostic will keep the pump but skip reads until we've passed
+    // initial network sync.
+    // fv::damage_start(g_libhl);
     if (!fv::hl_hook_install(g_libhl)) {
         fv::logf("worker: hl_hook_install failed");
         return 2;
     }
-    fv::logf("worker: live — hl_alloc_obj hooked, watching ent.Hero");
+    fv::logf("worker: live — hl_alloc_obj hooked, watching ent.Hero "
+             "(damage pump disabled)");
     return 0;
 }
 
@@ -86,6 +92,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH:
+            // fv::damage_stop();   // matches the disabled damage_start
             fv::hl_hook_uninstall();
             fv::dinput8_proxy_unload();
             fv::log_line("DllMain DETACH");
