@@ -32,6 +32,15 @@ The bezel buttons, going around the rim:
 When you walk into a dungeon, the overlay shows a spinner while it
 reconnects to your character. The minimap stays on the whole time.
 
+## Troubleshooting
+
+If the minimap ever stops drawing or you feel the game hitching
+because of it (for example after a HomeStone or zone change), press
+**F8** to toggle the overlay off. Press F8 again to bring it back.
+The mod also disables itself automatically if it detects the GPU
+stalling on the overlay for too long in a row, so you should not
+need a game restart to recover from a bad transition.
+
 ## Notes
 
 The mod is read only. It reads your own player state out of the game
