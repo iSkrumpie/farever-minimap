@@ -20,6 +20,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <vector>
 
@@ -55,9 +56,38 @@ std::vector<Pending>        g_pending;
 
 HeroSnapshot                g_snapshot{};
 
-// Returns true if this Hero pointer is currently the local player's
-// (ownerPlayer.isMe == 1 and the bidirectional Player.hero matches).
-// Used both at lock time and during periodic re-validation.
+// Plausible world-coordinate ranges (W1 spans ~6 tiles × 256 m).
+// Used to reject sync-proxy / template Heroes whose isMe is set but
+// whose position is still (0,0) — the structural scan in minimap-dll
+// applied the same filter, and skipping it here was the cause of the
+// "arrow doesn't track the player" bug.
+constexpr double RX_LO = -10000.0, RX_HI = 10000.0;
+constexpr double RY_LO = -10000.0, RY_HI = 10000.0;
+constexpr double RZ_LO =   -500.0, RZ_HI =  1500.0;
+
+bool position_is_plausible(std::uintptr_t hero_ptr) {
+    double pos[4];
+    if (!mem_read_bytes(hero_ptr + OFF_HERO_POSX, pos, sizeof(pos)))
+        return false;
+    double x = pos[0], y = pos[1], z = pos[2];
+    if (std::isnan(x) || std::isinf(x)) return false;
+    if (std::isnan(y) || std::isinf(y)) return false;
+    if (std::isnan(z) || std::isinf(z)) return false;
+    if (x < RX_LO || x > RX_HI) return false;
+    if (y < RY_LO || y > RY_HI) return false;
+    if (z < RZ_LO || z > RZ_HI) return false;
+    // (0, 0) is the canonical "uninitialised" pose — reject it
+    // explicitly so we don't lock on a template Hero whose isMe was
+    // already set by the network deserialiser.
+    if (std::fabs(x) < 0.01 && std::fabs(y) < 0.01) return false;
+    return true;
+}
+
+// Returns true if this Hero pointer is currently the local player's:
+//   - ownerPlayer.isMe == 1
+//   - bidirectional Player.hero == this Hero
+//   - position is a plausible in-world coordinate (not the world
+//     origin and not the bogus values a not-yet-streamed Hero shows)
 bool is_local_hero(std::uintptr_t hero_ptr) {
     std::uint64_t owner_u64 = 0;
     if (!mem_read_u64(hero_ptr + OFF_HERO_OWNERPLAYER, &owner_u64)) return false;
@@ -70,7 +100,9 @@ bool is_local_hero(std::uintptr_t hero_ptr) {
 
     std::uint8_t is_me = 0;
     if (!mem_read_u8(owner + OFF_PLAYER_ISME, &is_me)) return false;
-    return is_me == 1;
+    if (is_me != 1) return false;
+
+    return position_is_plausible(hero_ptr);
 }
 
 void on_hero_alloc(std::uintptr_t obj) {
@@ -176,6 +208,14 @@ void hero_state_tick() {
     }
 
     publish();
+
+    // Heartbeat: log current position every ~10 s so we can sanity-
+    // check that the locked Hero is actually moving with the player.
+    if (locked && (n % 600 == 0)) {
+        logf("hero_state: pos=(%.1f, %.1f, %.1f) rot=%.3f (tick %llu)",
+             g_snapshot.x, g_snapshot.y, g_snapshot.z, g_snapshot.rot_z,
+             static_cast<unsigned long long>(n));
+    }
 }
 
 HeroSnapshot hero_state_read() { return g_snapshot; }
