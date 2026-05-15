@@ -27,6 +27,10 @@ tools/verify_stable.txt
 # Local-session noise from Claude Code hooks
 .remember/
 
+# Release artifacts (uploaded via GitHub Releases, not into git)
+release/
+farever-minimap-*.zip
+
 # Build output
 build/
 src/**/build/

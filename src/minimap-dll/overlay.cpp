@@ -89,6 +89,10 @@ struct Overlay {
 Overlay g_overlay;
 std::atomic<bool> g_in_render{false};
 
+// Forward declarations for path helpers defined further down.
+std::wstring dll_dir();
+std::wstring data_path(const wchar_t* relative);
+
 // --- WndProc chain ----------------------------------------------------------
 
 LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -323,27 +327,28 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     // legacy InitLegacySingleDescriptorMode). The 4096² preview PNG is
     // ~64 MB of GPU memory; the full 11264² mosaic is too big and is
     // saved for tile streaming later.
+    std::wstring mosaic_path = data_path(L"maps\\W1_Siagarta.preview.png");
     if (!load_texture_from_file(
             g_overlay.device, g_overlay.srv_heap, 1,
-            L"D:\\farevermod\\research\\maps\\W1_Siagarta.preview.png",
-            &g_overlay.mosaic)) {
+            mosaic_path.c_str(), &g_overlay.mosaic)) {
         logf("overlay: mosaic load failed; running without map background");
     }
 
-    pois_load(L"D:\\farevermod\\research\\pois_W1_Siagarta.json");
+    std::wstring pois_path = data_path(L"pois_W1_Siagarta.json");
+    pois_load(pois_path.c_str());
 
     // SRV slot 2 = POI activity icon atlas. Used by pois_draw_atlas.
+    std::wstring atlas_path = data_path(L"icons\\activities.png");
     if (!load_texture_from_file(
             g_overlay.device, g_overlay.srv_heap, 2,
-            L"D:\\farevermod\\research\\icons\\activities.png",
-            &g_overlay.poi_atlas)) {
+            atlas_path.c_str(), &g_overlay.poi_atlas)) {
         logf("overlay: poi atlas load failed; falling back to shapes");
     }
     // SRV slot 3 = player arrow, rotated by yaw at the player position.
+    std::wstring arrow_path = data_path(L"icons\\PlayerMapArrow.png");
     if (!load_texture_from_file(
             g_overlay.device, g_overlay.srv_heap, 3,
-            L"D:\\farevermod\\research\\icons\\PlayerMapArrow.png",
-            &g_overlay.player_arrow)) {
+            arrow_path.c_str(), &g_overlay.player_arrow)) {
         logf("overlay: player arrow load failed; falling back to dot");
     }
 
@@ -376,8 +381,37 @@ struct Calibration {
 };
 Calibration g_calib;
 
-const wchar_t* kCalibPath =
-    L"D:\\farevermod\\research\\minimap_calibration.json";
+// Path resolution: end-user installs unzip the release wherever they
+// like, so every data file the DLL touches is referenced relative to
+// the DLL's own location.
+std::wstring dll_dir() {
+    HMODULE hmod = nullptr;
+    GetModuleHandleExW(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCWSTR>(&dll_dir),
+        &hmod);
+    wchar_t path[MAX_PATH];
+    DWORD n = GetModuleFileNameW(hmod, path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return L".";
+    std::wstring s(path);
+    auto pos = s.find_last_of(L'\\');
+    if (pos == std::wstring::npos) return L".";
+    s.resize(pos);
+    return s;
+}
+
+std::wstring data_path(const wchar_t* relative) {
+    std::wstring s = dll_dir();
+    s += L"\\data\\";
+    s += relative;
+    return s;
+}
+
+const std::wstring& kCalibPath() {
+    static const std::wstring p = data_path(L"minimap_calibration.json");
+    return p;
+}
 
 bool calib_extract_double(const std::string& json, const char* key,
                           double& out) {
@@ -414,7 +448,7 @@ void calib_maybe_reload() {
     static FILETIME last_write{};
     static bool     first_check = true;
     WIN32_FILE_ATTRIBUTE_DATA attr;
-    if (!GetFileAttributesExW(kCalibPath, GetFileExInfoStandard, &attr)) {
+    if (!GetFileAttributesExW(kCalibPath().c_str(), GetFileExInfoStandard, &attr)) {
         return;  // file missing — keep current (defaults)
     }
     if (!first_check &&
@@ -425,7 +459,7 @@ void calib_maybe_reload() {
     last_write  = attr.ftLastWriteTime;
     first_check = false;
 
-    std::ifstream f(kCalibPath);
+    std::ifstream f(kCalibPath());
     if (!f) return;
     std::string text((std::istreambuf_iterator<char>(f)),
                       std::istreambuf_iterator<char>());
