@@ -28,6 +28,11 @@
 namespace farever {
 namespace {
 
+// ui.comp.DamageDisplay layout (the UI element — only allocated when
+// damage is shown to the local player visually, which is the filter
+// we want for "my DPS only"):
+constexpr std::size_t OFF_DD_DMG_PTR = 1176;   // *DamageResult
+
 // st.skill.DamageResult layout:
 constexpr std::size_t OFF_DR_BASESKILL = 8;
 constexpr std::size_t OFF_DR_AMOUNT    = 80;
@@ -103,9 +108,22 @@ bool decode_skill_name(std::uintptr_t dr_ptr, char out[64]) {
     return true;
 }
 
-// True = settled (either a valid event, or filtered garbage — caller
-// drops it). False = not yet populated, retry on next tick.
-bool try_decode(std::uintptr_t dr_ptr, DamageEvent* out) {
+// True = settled, false = not yet populated (retry next tick).
+// `dd_ptr` is the DamageDisplay we observed at alloc time; we chase
+// its dmgPtr field to find the underlying DamageResult, then decode
+// that. Using DD as the trigger gives us automatic filtering — DDs
+// only get created when the game's UI layer decides to render the
+// hit number to the local player.
+bool try_decode(std::uintptr_t dd_ptr, DamageEvent* out) {
+    std::uint64_t dr_u64 = 0;
+    if (!mem_read_u64(dd_ptr + OFF_DD_DMG_PTR, &dr_u64)) return false;
+    if (dr_u64 == 0) return false;  // DD constructor not done yet
+    auto dr_ptr = static_cast<std::uintptr_t>(dr_u64);
+    if (!mem_is_userland(dr_ptr)) {
+        g_dropped_garbage.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
     std::int32_t hits = 0;
     if (!mem_read_i32(dr_ptr + OFF_DR_HITCOUNT, &hits)) return false;
     if (hits == 0) return false;
@@ -130,7 +148,9 @@ bool try_decode(std::uintptr_t dr_ptr, DamageEvent* out) {
         return true;
     }
 
-    out->dr_ptr    = dr_ptr;
+    out->dr_ptr    = dr_ptr;         // dedupe by DR so multiple DDs on
+                                     // the same DR (crit + main, etc.)
+                                     // only emit once
     out->damage    = damage;
     out->hit_count = hits;
     out->is_crit   = crit ? 1 : 0;
@@ -139,11 +159,11 @@ bool try_decode(std::uintptr_t dr_ptr, DamageEvent* out) {
     return true;
 }
 
-void on_dr_alloc(std::uintptr_t dr_ptr) {
-    if (!dr_ptr) return;
+void on_dd_alloc(std::uintptr_t dd_ptr) {
+    if (!dd_ptr) return;
     g_allocs_seen.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(g_pending_mu);
-    g_pending.push_back({dr_ptr, 0});
+    g_pending.push_back({dd_ptr, 0});
 }
 
 }  // namespace
@@ -164,8 +184,9 @@ void damage_start(const LibHL& /*libhl*/) {
         g_events.clear();
         g_seen_dr.clear();
     }
-    hl_hook_register(L"st.skill.DamageResult", on_dr_alloc);
-    logf("damage: watcher registered (render-thread tick)");
+    hl_hook_register(L"ui.comp.DamageDisplay", on_dd_alloc);
+    logf("damage: watcher registered on ui.comp.DamageDisplay "
+         "(render-thread tick) — UI-layer filter for local-player damage");
 }
 
 void damage_stop() {

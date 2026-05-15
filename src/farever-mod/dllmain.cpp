@@ -19,6 +19,7 @@
 #include "hl_hook.h"
 #include "damage.h"
 #include "d3d12_hook.h"
+#include "overlay.h"
 
 #include <windows.h>
 #include <atomic>
@@ -92,6 +93,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH:
+            fv::overlay_shutdown();
             fv::d3d12_hook_uninstall();
             fv::damage_stop();
             fv::hl_hook_uninstall();

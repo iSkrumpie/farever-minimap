@@ -9,6 +9,7 @@
 #include "d3d12_hook.h"
 #include "log.h"
 #include "damage.h"
+#include "overlay.h"
 
 #include <windows.h>
 #include <atomic>
@@ -37,20 +38,22 @@ std::atomic<bool> g_installed{false};
 
 HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain3* self,
                                        UINT sync_interval, UINT flags) {
-    // Present is called once per frame on the game's render thread,
-    // which HashLink has already registered with its GC. This is the
-    // safe place to drain the alloc-hook event queue and read object
-    // fields — anywhere else the cross-thread reads race with hxbit's
-    // deserialiser and crash the engine.
+    // Present runs on the game's render thread (HashLink-registered),
+    // so this is the safe place for both the damage pump (heap reads
+    // on freshly-allocated DRs) and the ImGui overlay submission.
     damage_tick();
+    overlay_on_present(self, g_captured_queue.load());
     return g_orig_present(self, sync_interval, flags);
 }
 
 HRESULT STDMETHODCALLTYPE hook_resize_buffers(
     IDXGISwapChain3* self, UINT buffer_count, UINT width, UINT height,
     DXGI_FORMAT new_format, UINT swap_chain_flags) {
-    return g_orig_resize_buffers(self, buffer_count, width, height,
-                                 new_format, swap_chain_flags);
+    overlay_on_resize(self, buffer_count, width, height);
+    HRESULT hr = g_orig_resize_buffers(self, buffer_count, width, height,
+                                       new_format, swap_chain_flags);
+    overlay_after_resize(self);
+    return hr;
 }
 
 void STDMETHODCALLTYPE hook_execute_command_lists(
