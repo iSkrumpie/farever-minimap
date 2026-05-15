@@ -8,6 +8,7 @@ add_library(farever_mod SHARED
     hl_hook.cpp
     damage.cpp
     aggregator.cpp
+    hero_state.cpp
     overlay.cpp
     d3d12_hook.cpp
     dinput8.def

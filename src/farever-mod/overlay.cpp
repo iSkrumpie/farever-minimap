@@ -7,6 +7,7 @@
 #include "log.h"
 #include "aggregator.h"
 #include "damage.h"
+#include "hero_state.h"
 
 #include <windows.h>
 
@@ -288,6 +289,36 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     return true;
 }
 
+// Tiny placeholder UI for phase-4a hero lock — single text panel
+// showing position / orientation once the alloc-hook hero watcher has
+// settled. Phase-4b replaces this with the full compass + bezel
+// controls, and 4c adds the mosaic background + POI overlay.
+void render_position_window() {
+    HeroSnapshot h = hero_state_read();
+    ImGui::SetNextWindowPos(ImVec2(20, 400), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(220, 110), ImGuiCond_FirstUseEver);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, kColBtnFill);
+    ImGui::PushStyleColor(ImGuiCol_Border,   kColBezel);
+    ImGui::PushStyleColor(ImGuiCol_Text,     kColText);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+    ImGui::Begin("Position", nullptr,
+                 ImGuiWindowFlags_NoCollapse |
+                 ImGuiWindowFlags_NoScrollbar);
+    if (!h.locked) {
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.5f, 1.0f),
+                           "Waiting for Hero alloc...");
+    } else {
+        ImGui::Text("X    %9.2f", h.x);
+        ImGui::Text("Y    %9.2f", h.y);
+        ImGui::Text("Z    %9.2f", h.z);
+        ImGui::Text("yaw  %9.2f", h.rot_z);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
+}
+
 void render_imgui_window() {
     // The aggregator's events come from damage_drain. Pull them and
     // refresh the snapshot every frame.
@@ -418,6 +449,7 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     render_imgui_window();
+    render_position_window();
     ImGui::Render();
 
     frame.allocator->Reset();
