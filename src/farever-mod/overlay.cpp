@@ -10,7 +10,9 @@
 #include "hero_state.h"
 #include "textures.h"
 #include "pois.h"
+#include "poi_progress.h"
 #include "skill_resolve.h"
+#include "entity_state.h"
 
 #include <unordered_map>
 
@@ -143,12 +145,41 @@ struct PoiFilter {
     bool merchants  = true;
     bool dungeons   = true;
     bool activities = true;
+    // Collectibles + farming nodes. Off by default — the chest button
+    // on the bezel toggles all four at once for quick on/off, and
+    // each one can be turned on individually in the filter panel.
+    bool chests     = false;
+    bool red_orbs   = false;
+    bool plants     = false;
+    bool ores       = false;
 };
 PoiFilter g_filter;
 bool g_filter_open       = false;
 bool g_keys_open         = false;
 bool g_compass_collapsed = false;
 int  g_selected_fight_id = 0;   // 0 = no fight detail open
+std::atomic<bool> g_ui_locked{false};  // when true, all overlay windows refuse to move
+
+// Bezel button layout — angle (rad) around the compass center, one
+// entry per button. Right-click + drag in render_compass reassigns
+// these; ui_state.json persists them. The default values reproduce
+// the pre-customisation layout.
+struct BezelLayout {
+    float pin      = -3.14159265f * 0.32f;
+    float size     = -3.14159265f * 0.20f;
+    float collapse = -3.14159265f * 0.50f;
+    float filter   =  3.14159265f * 1.20f;
+    float lock     =  3.14159265f * 0.84f;
+    float keys     =  3.14159265f * 0.68f;
+    float chest    =  3.14159265f * 0.50f;
+    float plus     =  3.14159265f * 0.20f;
+    float minus    =  3.14159265f * 0.32f;
+};
+BezelLayout g_bezel;
+int         g_bezel_drag = -1;   // 0..8 while a right-drag is in progress
+
+void ui_lock_load();
+void ui_lock_save();
 
 float compass_size_px() { return kCompassSizes[g_compass_size_idx]; }
 
@@ -158,6 +189,10 @@ bool poi_passes_filter(const PoiRow& p) {
     if (std::strcmp(p.kind, "merchant")  == 0) return g_filter.merchants;
     if (std::strcmp(p.kind, "dungeon")   == 0) return g_filter.dungeons;
     if (std::strcmp(p.kind, "activity")  == 0) return g_filter.activities;
+    if (std::strcmp(p.kind, "chest")     == 0) return g_filter.chests;
+    if (std::strcmp(p.kind, "red_orb")   == 0) return g_filter.red_orbs;
+    if (std::strcmp(p.kind, "plant")     == 0) return g_filter.plants;
+    if (std::strcmp(p.kind, "ore")       == 0) return g_filter.ores;
     return true;
 }
 
@@ -458,6 +493,65 @@ void keybinds_maybe_reload() {
          key_to_name(kb.reset_dps).c_str());
 }
 
+const std::wstring& kUiStatePath() {
+    static const std::wstring p = data_path(L"ui_state.json");
+    return p;
+}
+
+// Pull a numeric value off something like "name":  -1.234
+bool ui_state_extract_float(const std::string& json, const char* key,
+                            float& out) {
+    std::string needle = "\""; needle += key; needle += "\":";
+    auto i = json.find(needle);
+    if (i == std::string::npos) return false;
+    i += needle.size();
+    while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) ++i;
+    char* end = nullptr;
+    float v = (float)std::strtod(json.c_str() + i, &end);
+    if (end == json.c_str() + i) return false;
+    out = v;
+    return true;
+}
+
+void ui_lock_load() {
+    std::ifstream f(kUiStatePath());
+    if (!f) return;
+    std::string s((std::istreambuf_iterator<char>(f)),
+                  std::istreambuf_iterator<char>());
+    g_ui_locked.store(s.find("\"locked\": true") != std::string::npos ||
+                      s.find("\"locked\":true")  != std::string::npos);
+
+    // Bezel angles — each one optional; defaults stay if absent.
+    ui_state_extract_float(s, "pin",      g_bezel.pin);
+    ui_state_extract_float(s, "size",     g_bezel.size);
+    ui_state_extract_float(s, "collapse", g_bezel.collapse);
+    ui_state_extract_float(s, "filter",   g_bezel.filter);
+    ui_state_extract_float(s, "lock",     g_bezel.lock);
+    ui_state_extract_float(s, "keys",     g_bezel.keys);
+    ui_state_extract_float(s, "chest",    g_bezel.chest);
+    ui_state_extract_float(s, "plus",     g_bezel.plus);
+    ui_state_extract_float(s, "minus",    g_bezel.minus);
+}
+
+void ui_lock_save() {
+    std::wstring dir_path = dll_dir() + L"\\data";
+    CreateDirectoryW(dir_path.c_str(), nullptr);
+    std::ofstream f(kUiStatePath());
+    if (!f) return;
+    f << "{\n"
+      << "  \"locked\":   " << (g_ui_locked.load() ? "true" : "false") << ",\n"
+      << "  \"pin\":      " << g_bezel.pin      << ",\n"
+      << "  \"size\":     " << g_bezel.size     << ",\n"
+      << "  \"collapse\": " << g_bezel.collapse << ",\n"
+      << "  \"filter\":   " << g_bezel.filter   << ",\n"
+      << "  \"lock\":     " << g_bezel.lock     << ",\n"
+      << "  \"keys\":     " << g_bezel.keys     << ",\n"
+      << "  \"chest\":    " << g_bezel.chest    << ",\n"
+      << "  \"plus\":     " << g_bezel.plus     << ",\n"
+      << "  \"minus\":    " << g_bezel.minus    << "\n"
+      << "}\n";
+}
+
 void keybinds_save() {
     std::wstring dir_path = dll_dir() + L"\\data";
     CreateDirectoryW(dir_path.c_str(), nullptr);
@@ -601,6 +695,42 @@ void bezel_draw_key(ImDrawList* dl, const BezelButton& b, bool active) {
     dl->AddLine({b.center.x + 5.0f, bow.y},
                 {b.center.x + 5.0f, bow.y + 3.0f}, c, 1.8f);
 }
+void bezel_draw_lock(ImDrawList* dl, const BezelButton& b, bool locked) {
+    bezel_draw_base(dl, b);
+    ImU32 c = locked ? IM_COL32(255, 220, 100, 255) : kColIcon;
+    // Body of the padlock
+    ImVec2 tl(b.center.x - 4.0f, b.center.y);
+    ImVec2 br(b.center.x + 4.0f, b.center.y + 4.5f);
+    dl->AddRect(tl, br, c, 0.8f, 0, 1.5f);
+    // Keyhole
+    dl->AddCircleFilled({b.center.x, b.center.y + 2.0f}, 0.9f, c, 8);
+    // Shackle — closed loop when locked, open hook when not
+    ImVec2 lShank(b.center.x - 2.5f, b.center.y);
+    ImVec2 lTop  (b.center.x - 2.5f, b.center.y - 3.5f);
+    ImVec2 rTop  (b.center.x + 2.5f, b.center.y - 3.5f);
+    ImVec2 rShank(b.center.x + 2.5f, b.center.y);
+    dl->AddLine(lShank, lTop, c, 1.5f);
+    dl->AddLine(lTop,   rTop, c, 1.5f);
+    if (locked) dl->AddLine(rTop, rShank, c, 1.5f);
+}
+void bezel_draw_chest(ImDrawList* dl, const BezelButton& b, bool active) {
+    bezel_draw_base(dl, b);
+    ImU32 c = active ? IM_COL32(255, 220, 100, 255) : kColIcon;
+    // body
+    float w = 5.5f, hUp = 4.0f, hDn = 2.5f;
+    ImVec2 tl(b.center.x - w, b.center.y - hUp);
+    ImVec2 tr(b.center.x + w, b.center.y - hUp);
+    ImVec2 bl(b.center.x - w, b.center.y + hDn);
+    ImVec2 br(b.center.x + w, b.center.y + hDn);
+    dl->AddRect(tl, br, c, 0.5f, 0, 1.6f);
+    // lid seam
+    dl->AddLine({tl.x, b.center.y - 1.0f},
+                {tr.x, b.center.y - 1.0f}, c, 1.4f);
+    // lock plate
+    dl->AddRectFilled(
+        {b.center.x - 1.0f, b.center.y - 1.5f},
+        {b.center.x + 1.0f, b.center.y + 1.0f}, c);
+}
 
 void render_compass(const HeroSnapshot& h) {
     constexpr float kPi = 3.14159265358979323846f;
@@ -619,13 +749,15 @@ void render_compass(const HeroSnapshot& h) {
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##compass_body", ImVec2(size, size));
 
-    BezelButton pin      = bezel_hit("##pin",        center, r, -kPi * 0.32f, btn_r);
-    BezelButton sizeb    = bezel_hit("##size_cycle", center, r, -kPi * 0.20f, btn_r);
-    BezelButton collapse = bezel_hit("##collapse",   center, r, -kPi * 0.50f, btn_r);
-    BezelButton filter   = bezel_hit("##filter",     center, r,  kPi * 1.20f, btn_r);
-    BezelButton keys     = bezel_hit("##keys",       center, r,  kPi * 0.68f, btn_r);
-    BezelButton plus     = bezel_hit("##zoom_plus",  center, r,  kPi * 0.20f, btn_r);
-    BezelButton minus    = bezel_hit("##zoom_minus", center, r,  kPi * 0.32f, btn_r);
+    BezelButton pin      = bezel_hit("##pin",        center, r, g_bezel.pin,      btn_r);
+    BezelButton sizeb    = bezel_hit("##size_cycle", center, r, g_bezel.size,     btn_r);
+    BezelButton collapse = bezel_hit("##collapse",   center, r, g_bezel.collapse, btn_r);
+    BezelButton filter   = bezel_hit("##filter",     center, r, g_bezel.filter,   btn_r);
+    BezelButton lockb    = bezel_hit("##lock",       center, r, g_bezel.lock,     btn_r);
+    BezelButton keys     = bezel_hit("##keys",       center, r, g_bezel.keys,     btn_r);
+    BezelButton chest    = bezel_hit("##chest",      center, r, g_bezel.chest,    btn_r);
+    BezelButton plus     = bezel_hit("##zoom_plus",  center, r, g_bezel.plus,     btn_r);
+    BezelButton minus    = bezel_hit("##zoom_minus", center, r, g_bezel.minus,    btn_r);
 
     auto* dl = ImGui::GetWindowDrawList();
     ViewUV view = compute_view_uv(h.x, h.y, h.locked);
@@ -652,17 +784,143 @@ void render_compass(const HeroSnapshot& h) {
         const float shape_size = icon_size * 0.45f;
         ImTextureID atlas = g_overlay.poi_atlas.resource
             ? (ImTextureID)g_overlay.poi_atlas.srv_gpu.ptr : (ImTextureID)0;
+        // Hover scaling: any POI within this many pixels of the mouse
+        // grows ~80% so it's much easier to right-click. Only applies
+        // while the cursor is over the compass disc.
+        ImVec2 mouse_pos     = ImGui::GetMousePos();
+        bool   compass_hover = ImGui::IsMouseHoveringRect(p_min, p_max);
+        const float kHoverRadius = 16.0f;
+
+        // Track candidates for right-click hit-testing below.
+        struct ClickCand { ImVec2 sp; const PoiRow* p; };
+        std::vector<ClickCand> click_cands;
+        click_cands.reserve(pois.size() / 4);
+
         for (const auto& poi : pois) {
             if (!poi_passes_filter(poi)) continue;
             ImVec2 sp_local = player_to_screen(poi.x, poi.y, view, size);
             ImVec2 sp(p_min.x + sp_local.x, p_min.y + sp_local.y);
             float ddx = sp.x - center.x, ddy = sp.y - center.y;
             if (ddx * ddx + ddy * ddy > clip_r2) continue;
-            ImVec2 uv0, uv1;
-            if (atlas && pois_atlas_uv(poi, uv0, uv1)) {
-                pois_draw_atlas(dl, atlas, sp, uv0, uv1, icon_size);
+
+            // User-marked-done collectibles are dimmed (alpha-tinted)
+            // rather than hidden so the user always sees the total
+            // layout. Right-click toggles below.
+            bool is_done = poi.id[0] && poi_progress_is_done(poi.id);
+
+            // Hover test: enlarge on hover for easier targeting.
+            float hover_scale = 1.0f;
+            if (compass_hover) {
+                float mdx = sp.x - mouse_pos.x;
+                float mdy = sp.y - mouse_pos.y;
+                if (mdx * mdx + mdy * mdy < kHoverRadius * kHoverRadius)
+                    hover_scale = 1.8f;
+            }
+
+            const float icon_sz  = icon_size  * hover_scale;
+            const float shape_sz = shape_size * hover_scale;
+
+            // Per-kind drawing path:
+            // 1) Collectible (chest/red_orb/plant/ore): custom glyph
+            //    drawn at the kind's signature color, alpha-dimmed
+            //    if marked done.
+            // 2) Activity / dungeon / obelisk etc: atlas-icon if a
+            //    UV mapping exists, else fall back to shape marker.
+            ImU32 fill = pois_style(poi).color;
+            if (is_done) {
+                std::uint32_t a = (fill >> 24) & 0xff;
+                a = (a * 70) / 255;
+                fill = (fill & 0x00ffffff) | (a << 24);
+            }
+            if (pois_draw_collectible(dl, sp, shape_sz, poi.kind, fill)) {
+                // done — collectible glyph drawn
             } else {
-                pois_draw_marker(dl, sp, pois_style(poi), shape_size);
+                ImU32 tint = is_done ? IM_COL32(255, 255, 255, 70)
+                                     : IM_COL32_WHITE;
+                ImVec2 uv0, uv1;
+                if (atlas && pois_atlas_uv(poi, uv0, uv1)) {
+                    ImVec2 a(sp.x - icon_sz, sp.y - icon_sz);
+                    ImVec2 b(sp.x + icon_sz, sp.y + icon_sz);
+                    dl->AddImage(atlas, a, b, uv0, uv1, tint);
+                } else {
+                    PoiStyle st = pois_style(poi);
+                    st.color = fill;
+                    pois_draw_marker(dl, sp, st, shape_sz);
+                }
+            }
+
+            // Right-click target: only collectibles can be toggled,
+            // not story POIs (dungeon, obelisk, merchant ...).
+            if (std::strcmp(poi.kind, "chest")   == 0 ||
+                std::strcmp(poi.kind, "red_orb") == 0) {
+                click_cands.push_back({sp, &poi});
+            }
+        }
+
+        // Right-click handling: priority 1 is bezel-button drag (so
+        // the user can rearrange the rim layout), priority 2 is the
+        // collectible-toggle. Drag is only enabled while UI is
+        // unlocked — locking pins the layout in place.
+        bool right_consumed = false;
+        if (!g_ui_locked.load()) {
+            // Pointer to each angle in g_bezel + button positions we
+            // already computed via bezel_hit, ordered to match.
+            float* angles[] = { &g_bezel.pin, &g_bezel.size,
+                                &g_bezel.collapse, &g_bezel.filter,
+                                &g_bezel.lock,    &g_bezel.keys,
+                                &g_bezel.chest,   &g_bezel.plus,
+                                &g_bezel.minus };
+            ImVec2 btn_pos[] = { pin.center, sizeb.center, collapse.center,
+                                 filter.center, lockb.center, keys.center,
+                                 chest.center, plus.center, minus.center };
+            constexpr int kNumBezel = 9;
+
+            if (ImGui::IsMouseHoveringRect(p_min, p_max) &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Right) &&
+                g_bezel_drag < 0) {
+                ImVec2 m = ImGui::GetMousePos();
+                for (int i = 0; i < kNumBezel; ++i) {
+                    float dx = btn_pos[i].x - m.x;
+                    float dy = btn_pos[i].y - m.y;
+                    if (dx * dx + dy * dy < btn_r * btn_r) {
+                        g_bezel_drag = i;
+                        right_consumed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (g_bezel_drag >= 0) {
+                if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+                    ImVec2 m = ImGui::GetMousePos();
+                    float a = std::atan2f(m.y - center.y, m.x - center.x);
+                    *angles[g_bezel_drag] = a;
+                    right_consumed = true;
+                } else {
+                    g_bezel_drag = -1;
+                    ui_lock_save();   // persists locked + bezel angles
+                }
+            }
+        }
+
+        // Right-click on a collectible POI -> toggle done. Skipped if
+        // a bezel drag just started on this same right-click.
+        if (!right_consumed &&
+            ImGui::IsMouseHoveringRect(p_min, p_max) &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            ImVec2 m = ImGui::GetMousePos();
+            float best = 14.0f * 14.0f;
+            const PoiRow* hit = nullptr;
+            for (const auto& c : click_cands) {
+                float dx = c.sp.x - m.x, dy = c.sp.y - m.y;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < best) { best = d2; hit = c.p; }
+            }
+            if (hit && hit->id[0]) {
+                poi_progress_toggle(hit->id);
+                logf("poi_progress: toggled '%s' (%s) -> %s",
+                     hit->id, hit->kind,
+                     poi_progress_is_done(hit->id) ? "done" : "not done");
             }
         }
     }
@@ -694,11 +952,17 @@ void render_compass(const HeroSnapshot& h) {
         }
     }
 
+    // "Any collectible category on" reflects the chest button's lit state.
+    bool any_collectible_on = g_filter.chests || g_filter.red_orbs ||
+                              g_filter.plants || g_filter.ores;
+
     bezel_draw_pin     (dl, pin);
     bezel_draw_size    (dl, sizeb, g_compass_size_idx);
     bezel_draw_collapse(dl, collapse);
     bezel_draw_filter  (dl, filter, g_filter_open);
+    bezel_draw_lock    (dl, lockb,  g_ui_locked.load());
     bezel_draw_key     (dl, keys,   g_keys_open);
+    bezel_draw_chest   (dl, chest,  any_collectible_on);
     bezel_draw_plus    (dl, plus);
     bezel_draw_minus   (dl, minus);
 
@@ -706,9 +970,23 @@ void render_compass(const HeroSnapshot& h) {
     if (minus.clicked) { g_calib.zoom -= kZoomStep; if (g_calib.zoom < kZoomMin) g_calib.zoom = kZoomMin; }
     if (sizeb.clicked)    g_compass_size_idx = (g_compass_size_idx + 1) % 3;
     if (filter.clicked)   g_filter_open      = !g_filter_open;
+    if (lockb.clicked) {
+        g_ui_locked.store(!g_ui_locked.load());
+        ui_lock_save();
+        logf("ui: locked = %d", (int)g_ui_locked.load());
+    }
     if (keys.clicked)     g_keys_open        = !g_keys_open;
+    if (chest.clicked) {
+        // Quick toggle: if any category was on, turn them all off;
+        // otherwise turn all four on at once.
+        bool turn_on = !any_collectible_on;
+        g_filter.chests   = turn_on;
+        g_filter.red_orbs = turn_on;
+        g_filter.plants   = turn_on;
+        g_filter.ores     = turn_on;
+    }
     if (collapse.clicked) g_compass_collapsed = true;
-    if (pin.active) {
+    if (pin.active && !g_ui_locked.load()) {
         ImVec2 d = ImGui::GetIO().MouseDelta;
         if (d.x != 0.0f || d.y != 0.0f) {
             ImVec2 wp = ImGui::GetWindowPos();
@@ -737,7 +1015,7 @@ void render_minimap_window() {
         ImVec2 cmin = ImGui::GetCursorScreenPos();
         ImVec2 cc(cmin.x + puck * 0.5f, cmin.y + puck * 0.5f);
         ImGui::InvisibleButton("##puck", ImVec2(puck, puck));
-        if (ImGui::IsItemActive()) {
+        if (ImGui::IsItemActive() && !g_ui_locked.load()) {
             ImVec2 d = ImGui::GetIO().MouseDelta;
             if (d.x != 0.0f || d.y != 0.0f) {
                 ImVec2 wp = ImGui::GetWindowPos();
@@ -784,6 +1062,24 @@ void render_minimap_window() {
         ImGui::Checkbox("Dungeons",   &g_filter.dungeons);
         ImGui::Checkbox("Merchants",  &g_filter.merchants);
         ImGui::Checkbox("Activities", &g_filter.activities);
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::TextDisabled("Collectibles  (right-click on map to toggle)");
+        auto labelled = [](const char* base, const char* kind,
+                           char* out, std::size_t cap) {
+            int done = 0, total = 0;
+            poi_progress_counts(kind, &done, &total);
+            std::snprintf(out, cap, "%s  %d/%d", base, done, total);
+        };
+        char lbl[64];
+        labelled("Chests",   "chest",   lbl, sizeof(lbl));
+        ImGui::Checkbox(lbl, &g_filter.chests);
+        labelled("Red Orbs", "red_orb", lbl, sizeof(lbl));
+        ImGui::Checkbox(lbl, &g_filter.red_orbs);
+        // Plants / Ores respawn, so a "done X of Y" counter would be
+        // misleading. Plain labels.
+        ImGui::Checkbox("Plants", &g_filter.plants);
+        ImGui::Checkbox("Ores",   &g_filter.ores);
         ImGui::EndChild();
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(5);
@@ -843,7 +1139,9 @@ void render_fight_detail_window() {
     ImGui::SetNextWindowPos(ImVec2(80, 80), ImGuiCond_FirstUseEver);
 
     bool open = true;
-    if (ImGui::Begin(title, &open, ImGuiWindowFlags_NoScrollbar)) {
+    ImGuiWindowFlags fdetail_flags = ImGuiWindowFlags_NoScrollbar;
+    if (g_ui_locked.load()) fdetail_flags |= ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin(title, &open, fdetail_flags)) {
         ImGui::TextColored(ImVec4(1.0f, 0.86f, 0.52f, 1.0f),
                            "duration %.1fs", f->duration_sec);
         ImGui::SameLine(0.0f, 24.0f);
@@ -951,9 +1249,10 @@ void render_keys_window() {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,    4.0f);
 
     ImGui::SetNextWindowPos(ImVec2(620, 540), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Hotkeys", &g_keys_open,
-                     ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoScrollbar)) {
+    ImGuiWindowFlags keys_flags = ImGuiWindowFlags_AlwaysAutoResize |
+                                  ImGuiWindowFlags_NoScrollbar;
+    if (g_ui_locked.load()) keys_flags |= ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("Hotkeys", &g_keys_open, keys_flags)) {
         auto row = [](const char* label, RebindSlot slot, UINT vk) {
             int active  = g_rebind_listening.load();
             bool listen = (active == (int)slot);
@@ -1298,6 +1597,8 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     }
     std::wstring pois_p = data_path(L"pois_W1_Siagarta.json");
     pois_load(pois_p.c_str());
+    poi_progress_load();
+    ui_lock_load();
 
     logf("overlay: DX12+ImGui init OK (hwnd=%p, buffers=%u, fmt=%d)",
          g_overlay.hwnd, g_overlay.back_buffer_count,
@@ -1336,7 +1637,9 @@ void render_imgui_window() {
     // No NoCollapse flag: ImGui's title-bar collapse arrow lets the
     // user shrink the window to just the title bar by clicking the
     // triangle next to "DPS Meter".
-    ImGui::Begin("DPS Meter", nullptr, ImGuiWindowFlags_NoScrollbar);
+    ImGuiWindowFlags dps_flags = ImGuiWindowFlags_NoScrollbar;
+    if (g_ui_locked.load()) dps_flags |= ImGuiWindowFlags_NoMove;
+    ImGui::Begin("DPS Meter", nullptr, dps_flags);
 
     // Pick a layout tier from current content width — drives column
     // visibility, header/footer verbosity, icon scale. Thresholds tuned
@@ -1349,6 +1652,49 @@ void render_imgui_window() {
     if (content_w < 220.0f) tier = 0;
 
     const float kIconPx = (tier <= 1) ? 20.0f : (tier == 2 ? 22.0f : 24.0f);
+
+    // Lock toggle (tiny custom-drawn padlock) at the start of the
+    // status line. Same flag as the bezel lock button. We draw it
+    // ourselves with the ImDrawList because the default ImGui font
+    // doesn't ship the 🔒/🔓 unicode glyphs.
+    {
+        bool locked = g_ui_locked.load();
+        const float fh = ImGui::GetFontSize();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##lock_toggle", ImVec2(fh, fh));
+        bool hovered = ImGui::IsItemHovered();
+        if (ImGui::IsItemClicked()) {
+            g_ui_locked.store(!locked);
+            ui_lock_save();
+            locked = !locked;
+        }
+        if (hovered) {
+            ImGui::SetTooltip(locked ? "UI locked (click to unlock)"
+                                     : "UI unlocked (click to lock)");
+        }
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 c(p.x + fh * 0.5f, p.y + fh * 0.5f);
+        ImU32 col = locked ? IM_COL32(255, 220, 100, 240)
+                           : IM_COL32(190, 190, 190, 240);
+        if (hovered) col = IM_COL32(255, 255, 255, 255);
+        float s = fh * 0.30f;
+        // Body
+        dl->AddRect({c.x - s, c.y - s * 0.1f},
+                    {c.x + s, c.y + s * 1.05f},
+                    col, s * 0.15f, 0, 1.4f);
+        // Keyhole
+        dl->AddCircleFilled({c.x, c.y + s * 0.5f}, s * 0.20f, col, 10);
+        // Shackle
+        float sh = s * 0.65f;
+        dl->AddLine({c.x - sh, c.y - s * 0.1f},
+                    {c.x - sh, c.y - s * 0.9f}, col, 1.4f);
+        dl->AddLine({c.x - sh, c.y - s * 0.9f},
+                    {c.x + sh, c.y - s * 0.9f}, col, 1.4f);
+        if (locked)
+            dl->AddLine({c.x + sh, c.y - s * 0.9f},
+                        {c.x + sh, c.y - s * 0.1f}, col, 1.4f);
+        ImGui::SameLine(0.0f, 6.0f);
+    }
 
     // Combat-state badge, leading the status line. Red dot while in
     // combat, dim grey circle once we've idled past the timeout.

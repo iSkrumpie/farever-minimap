@@ -16,6 +16,7 @@
 #include "hl_hook.h"
 #include "mem_scan.h"
 #include "log.h"
+#include "progress_state.h"
 
 #include <windows.h>
 
@@ -311,6 +312,7 @@ void hero_state_tick() {
              (unsigned long long)n,
              (unsigned long long)locked);
         debug_dump_hero(verb, found);
+        progress_state_inspect(found);   // Phase 2A diagnostic
         locked = found;
     } else if (!retry.empty()) {
         std::lock_guard<std::mutex> lk(g_pending_mu);
@@ -355,5 +357,9 @@ void hero_state_tick() {
 }
 
 HeroSnapshot hero_state_read() { return g_snapshot; }
+
+std::uintptr_t hero_state_locked_ptr() {
+    return g_locked_hero.load(std::memory_order_acquire);
+}
 
 }  // namespace farever

@@ -10,6 +10,7 @@
 #include "log.h"
 #include "damage.h"
 #include "hero_state.h"
+#include "entity_state.h"
 #include "overlay.h"
 
 #include <windows.h>
@@ -44,6 +45,7 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain3* self,
     // on freshly-allocated DRs) and the ImGui overlay submission.
     damage_tick();
     hero_state_tick();
+    entity_state_tick();
     overlay_on_present(self, g_captured_queue.load());
     return g_orig_present(self, sync_interval, flags);
 }

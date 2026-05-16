@@ -17,6 +17,7 @@
 #include "damage.h"
 #include "hero_state.h"
 #include "skill_resolve.h"
+#include "entity_state.h"
 #include "d3d12_hook.h"
 #include "overlay.h"
 
@@ -41,6 +42,7 @@ DWORD WINAPI worker_thread(LPVOID) {
     fv::skill_resolve_init(g_libhl);
     fv::damage_start(g_libhl);
     fv::hero_state_start();
+    fv::entity_state_start();
 
     if (!fv::hl_hook_install(g_libhl)) {
         fv::logf("worker: hl_hook_install failed");

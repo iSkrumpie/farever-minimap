@@ -11,7 +11,10 @@ add_library(farever_mod SHARED
     hero_state.cpp
     textures.cpp
     pois.cpp
+    poi_progress.cpp
     skill_resolve.cpp
+    progress_state.cpp
+    entity_state.cpp
     overlay.cpp
     d3d12_hook.cpp
     dinput8.def

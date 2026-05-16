@@ -12,6 +12,7 @@
 // destabilised the engine (see feedback_hashlink_pump_thread.md).
 
 #include "damage.h"
+#include "hero_state.h"
 #include "skill_resolve.h"
 #include "hl_hook.h"
 #include "mem_scan.h"
@@ -29,17 +30,19 @@
 namespace farever {
 namespace {
 
-// ui.comp.DamageDisplay layout (the UI element — only allocated when
-// damage is shown to the local player visually, which is the filter
-// we want for "my DPS only"):
+// ui.comp.DamageDisplay layout (the UI element). DD is created for
+// ANY floating damage number the game shows — outgoing hits AND
+// incoming hits (bleeds, mob hits, AoE on us). The target filter
+// below drops events whose target is our own Hero (= incoming).
 constexpr std::size_t OFF_DD_DMG_PTR = 1176;   // *DamageResult
 
 // st.skill.DamageResult layout:
-constexpr std::size_t OFF_DR_BASESKILL = 8;
-constexpr std::size_t OFF_DR_AMOUNT    = 80;
-constexpr std::size_t OFF_DR_HITCOUNT  = 88;
-constexpr std::size_t OFF_DR_KILL      = 104;
-constexpr std::size_t OFF_DR_CRITICAL  = 105;
+constexpr std::size_t OFF_DR_BASESKILL    = 8;
+constexpr std::size_t OFF_DR_TARGET       = 40;   // *ent.GameObject (victim)
+constexpr std::size_t OFF_DR_AMOUNT       = 80;
+constexpr std::size_t OFF_DR_HITCOUNT     = 88;
+constexpr std::size_t OFF_DR_KILL         = 104;
+constexpr std::size_t OFF_DR_CRITICAL     = 105;
 
 constexpr std::size_t OFF_SKILL_KIND = 152;
 constexpr std::size_t OFF_STR_BYTES  = 8;
@@ -147,6 +150,22 @@ bool try_decode(std::uintptr_t dd_ptr, DamageEvent* out) {
     std::uint8_t kill = 0;
     mem_read_u8(dr_ptr + OFF_DR_CRITICAL, &crit);
     mem_read_u8(dr_ptr + OFF_DR_KILL,     &kill);
+
+    // Target filter: DD fires for ANY floating damage number, including
+    // hits ON the player (bleeds, mob attacks, ground AoE). If the
+    // DR's target is our own Hero, that's INCOMING — drop. (We tried
+    // matching serverSource against the Hero pointer first; it never
+    // matches because the game stores a network proxy / weak ref
+    // there, not the raw Hero address.)
+    std::uintptr_t my_hero = hero_state_locked_ptr();
+    if (my_hero) {
+        std::uint64_t tgt_u64 = 0;
+        if (mem_read_u64(dr_ptr + OFF_DR_TARGET, &tgt_u64) &&
+            tgt_u64 == (std::uint64_t)my_hero) {
+            g_dropped_garbage.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+    }
 
     char skill[64];
     if (!decode_skill_name(dr_ptr, skill)) {

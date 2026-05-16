@@ -41,6 +41,15 @@ REFERENCE_KINDS = [
     ("Gameplay/Elements/RespawnZone.prefab",            "respawn_zone"),
     ("/WanderingMerchant.prefab",                       "merchant"),
     ("Gameplay/Prefabs/GameplayBase/InstanceOrb.prefab", "dungeon"),
+    # Completionist collectibles + farming nodes (Phase 1: static).
+    ("/RedOrb_World.prefab",                            "red_orb"),
+    ("Gameplay/Elements/WorldChest.prefab",             "chest"),
+    ("Gameplay/Elements/Recipe_Chest.prefab",           "chest"),
+    ("Elements/Activities/OrbChest.prefab",             "chest"),
+    ("Elements/Activities/VaultChest.prefab",           "chest"),
+    ("Elements/Activities/CampChest.prefab",            "chest"),
+    ("/Plants/",                                        "plant"),
+    ("/Ores/",                                          "ore"),
 ]
 
 

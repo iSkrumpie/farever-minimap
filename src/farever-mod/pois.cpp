@@ -111,7 +111,7 @@ bool pois_load(const wchar_t* path) {
             return false;
         }
         PoiRow r{};
-        r.kind[0] = r.subkind[0] = r.name[0] = '\0';
+        r.kind[0] = r.subkind[0] = r.name[0] = r.id[0] = '\0';
         r.x = r.y = r.z = 0.0f;
 
         while (!ps.peek('}')) {
@@ -126,6 +126,9 @@ bool pois_load(const wchar_t* path) {
                 else ps.skip_value();
             } else if (key == "name") {
                 if (ps.peek('"')) { std::string v; ps.parse_string(v); copy_into(r.name, sizeof(r.name), v); }
+                else ps.skip_value();
+            } else if (key == "id") {
+                if (ps.peek('"')) { std::string v; ps.parse_string(v); copy_into(r.id, sizeof(r.id), v); }
                 else ps.skip_value();
             } else if (key == "x") {
                 double v; if (ps.parse_number(v)) r.x = static_cast<float>(v); else ps.skip_value();
@@ -194,6 +197,10 @@ PoiStyle pois_style(const PoiRow& p) {
     if (eq(p.kind, "obelisk"))  return {IM_COL32(120, 220, 255, 255), 3};
     if (eq(p.kind, "respawn"))  return {IM_COL32(120, 220, 120, 255), 4};
     if (eq(p.kind, "merchant")) return {IM_COL32(255, 200,  80, 255), 0};
+    if (eq(p.kind, "red_orb"))  return {IM_COL32(255,  60,  60, 255), 0};  // circle
+    if (eq(p.kind, "chest"))    return {IM_COL32(255, 200,  60, 255), 1};  // square (gold)
+    if (eq(p.kind, "plant"))    return {IM_COL32( 90, 200,  90, 255), 3};  // diamond (green)
+    if (eq(p.kind, "ore"))      return {IM_COL32(180, 140,  80, 255), 2};  // triangle (brown)
     if (eq(p.kind, "activity")) {
         if (eq(p.subkind, "WorldElite"))      return {IM_COL32(255,  80,  80, 255), 2};
         if (eq(p.subkind, "FightStone"))      return {IM_COL32(220, 100, 100, 255), 0};
@@ -253,6 +260,117 @@ void pois_draw_marker(ImDrawList* dl, ImVec2 pos, PoiStyle st, float size) {
             break;
         }
     }
+}
+
+// Per-kind collectible glyphs. Sized so `size` is roughly the icon's
+// outer radius — same convention as pois_draw_marker.
+namespace {
+
+ImU32 fade_to_outline(ImU32 fill) {
+    // Reuse the fill's alpha for the outline so dimmed (done) POIs
+    // still look coherent.
+    std::uint32_t a = (fill >> 24) & 0xff;
+    return IM_COL32(0, 0, 0, a > 230 ? 200 : a);
+}
+
+void draw_chest_glyph(ImDrawList* dl, ImVec2 c, float s, ImU32 fill) {
+    ImU32 outline = fade_to_outline(fill);
+    // Body: wide bottom, slightly taller lid on top
+    float w = s * 1.1f, hUp = s * 0.55f, hDn = s * 0.40f;
+    ImVec2 tl(c.x - w, c.y - hUp);
+    ImVec2 br(c.x + w, c.y + hDn);
+    dl->AddRectFilled(tl, br, fill, 0.5f);
+    dl->AddRect    (tl, br, outline, 0.5f, 0, 1.0f);
+    // Lid seam
+    dl->AddLine({tl.x, c.y - hUp * 0.1f},
+                {br.x, c.y - hUp * 0.1f}, outline, 1.0f);
+    // Lock plate (darker than fill)
+    std::uint32_t aA = (fill >> 24) & 0xff;
+    ImU32 lock = IM_COL32(40, 28, 12, aA);
+    dl->AddRectFilled({c.x - 1.6f, c.y - 1.6f},
+                      {c.x + 1.6f, c.y + 1.8f}, lock);
+}
+
+void draw_orb_glyph(ImDrawList* dl, ImVec2 c, float s, ImU32 fill) {
+    ImU32 outline = fade_to_outline(fill);
+    dl->AddCircleFilled(c, s, fill, 18);
+    // Highlight (upper-left dot)
+    std::uint32_t a = (fill >> 24) & 0xff;
+    ImU32 hi = IM_COL32(255, 220, 220, (a * 200) / 255);
+    dl->AddCircleFilled({c.x - s * 0.35f, c.y - s * 0.35f},
+                        s * 0.30f, hi, 10);
+    dl->AddCircle(c, s, outline, 18, 1.0f);
+}
+
+void draw_plant_glyph(ImDrawList* dl, ImVec2 c, float s, ImU32 fill) {
+    ImU32 outline = fade_to_outline(fill);
+    // Two side leaves + a small center sprout
+    dl->AddQuadFilled(
+        {c.x,              c.y + s * 0.25f},
+        {c.x - s * 0.9f,   c.y - s * 0.1f},
+        {c.x - s * 1.1f,   c.y + s * 0.4f},
+        {c.x - s * 0.35f,  c.y + s * 0.55f},
+        fill);
+    dl->AddQuadFilled(
+        {c.x,              c.y + s * 0.25f},
+        {c.x + s * 0.9f,   c.y - s * 0.1f},
+        {c.x + s * 1.1f,   c.y + s * 0.4f},
+        {c.x + s * 0.35f,  c.y + s * 0.55f},
+        fill);
+    dl->AddTriangleFilled(
+        {c.x,             c.y - s * 1.0f},
+        {c.x - s * 0.45f, c.y + s * 0.1f},
+        {c.x + s * 0.45f, c.y + s * 0.1f},
+        fill);
+    // Tiny stem
+    dl->AddLine({c.x, c.y + s * 0.55f},
+                {c.x, c.y + s * 1.0f}, outline, 1.5f);
+}
+
+void draw_ore_glyph(ImDrawList* dl, ImVec2 c, float s, ImU32 fill) {
+    ImU32 outline = fade_to_outline(fill);
+    auto diamond = [&](ImVec2 ctr, float r) {
+        ImVec2 a(ctr.x,         ctr.y - r);
+        ImVec2 b(ctr.x + r,     ctr.y);
+        ImVec2 d(ctr.x,         ctr.y + r);
+        ImVec2 e(ctr.x - r,     ctr.y);
+        dl->AddQuadFilled(a, b, d, e, fill);
+        dl->AddQuad      (a, b, d, e, outline, 1.0f);
+    };
+    diamond({c.x - s * 0.45f, c.y + s * 0.25f}, s * 0.55f);
+    diamond({c.x + s * 0.45f, c.y + s * 0.25f}, s * 0.50f);
+    diamond({c.x,             c.y - s * 0.30f}, s * 0.60f);
+}
+
+}  // anonymous
+
+bool pois_draw_collectible(ImDrawList* dl, ImVec2 center, float size,
+                           const char* kind, ImU32 fill) {
+    bool is_collectible =
+        std::strcmp(kind, "chest")   == 0 ||
+        std::strcmp(kind, "red_orb") == 0 ||
+        std::strcmp(kind, "plant")   == 0 ||
+        std::strcmp(kind, "ore")     == 0;
+    if (!is_collectible) return false;
+
+    // Backing disc + ring — gives every collectible icon a readable
+    // contrast against the terrain (plants on grass are the worst
+    // offender without this). Alpha tracks the fill so dimmed
+    // ("done") icons fade their background to match.
+    std::uint32_t fa  = (fill >> 24) & 0xff;
+    std::uint32_t bga = (fa * 175) / 255;
+    std::uint32_t rga = (fa * 230) / 255;
+    ImU32 bg   = IM_COL32(18, 14, 8,    bga);
+    ImU32 ring = IM_COL32(255, 220, 150, rga);
+    float r = size * 1.35f;
+    dl->AddCircleFilled(center, r,        bg,   18);
+    dl->AddCircle      (center, r + 0.5f, ring, 18, 1.2f);
+
+    if (std::strcmp(kind, "chest")   == 0) draw_chest_glyph(dl, center, size, fill);
+    if (std::strcmp(kind, "red_orb") == 0) draw_orb_glyph  (dl, center, size, fill);
+    if (std::strcmp(kind, "plant")   == 0) draw_plant_glyph(dl, center, size, fill);
+    if (std::strcmp(kind, "ore")     == 0) draw_ore_glyph  (dl, center, size, fill);
+    return true;
 }
 
 }  // namespace farever

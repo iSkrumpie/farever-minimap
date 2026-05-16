@@ -30,4 +30,9 @@ void hero_state_tick();
 
 HeroSnapshot hero_state_read();
 
+// Raw pointer to the currently-locked Hero, or 0 if no lock. Cheap
+// atomic load — used by the damage filter to drop DamageResults whose
+// serverSource isn't us (= incoming damage, bleeds etc.).
+std::uintptr_t hero_state_locked_ptr();
+
 }  // namespace farever

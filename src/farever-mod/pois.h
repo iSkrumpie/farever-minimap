@@ -13,6 +13,7 @@ struct PoiRow {
     char  kind[24];
     char  subkind[24];
     char  name[64];
+    char  id[80];     // unique identifier from the prefab tree
     float x;
     float y;
     float z;
@@ -37,5 +38,14 @@ bool pois_atlas_uv(const PoiRow& p, ImVec2& uv0, ImVec2& uv1);
 
 void pois_draw_atlas(ImDrawList* dl, ImTextureID atlas_srv, ImVec2 pos,
                      const ImVec2& uv0, const ImVec2& uv1, float size);
+
+// Per-collectible-kind glyph drawers. Used for kinds the game's POI
+// atlas doesn't cover (chest / red_orb / plant / ore). `fill` carries
+// both color and alpha — the caller pre-dims it for "done" POIs.
+// Returns true if a glyph was drawn, false if the kind isn't one of
+// the collectible categories (so the caller can fall back to
+// pois_draw_marker).
+bool pois_draw_collectible(ImDrawList* dl, ImVec2 center, float size,
+                           const char* kind, ImU32 fill);
 
 }  // namespace farever
