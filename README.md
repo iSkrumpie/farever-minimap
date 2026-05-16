@@ -152,6 +152,38 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.6
+
+User-reported issue sweep:
+
+* **Alt-tab crash fix** (issues #9, #10). When the game window is
+  iconic or hidden, we now skip overlay submission entirely. DXGI's
+  Present can return `DXGI_STATUS_OCCLUDED` in that state and our
+  back-buffer references aren't guaranteed valid, which matches the
+  alt-tab crash signature in the recent log uploads.
+* **Off-screen window rescue** (issue #1). If the minimap, DPS
+  meter, hotkeys window or fight-detail window load with a saved
+  position that's outside the current viewport, they snap back to a
+  visible spot the next frame. Used to require deleting
+  `farever_layout.ini` by hand to recover.
+* **Minimap size now persists across launches** (issue #6). The
+  compass size cycle (small / medium / large) is saved to
+  `ui_state.json` alongside the lock flag and bezel angles.
+* **Lock also blocks resize now** (issue #4 partial). Previously
+  locking the UI only stopped window moves, the resize corner was
+  still grabbable. With v0.4.6 the lock pins both. The full
+  click-through-on-mouselook fix (issues #4, #7) is the next
+  iteration.
+* **Fight-detail window default position** (issue #5). Used to open
+  at (80, 80) directly under the DPS meter, which made it look like
+  part of it. Bumped to (240, 240) so it's clearly a separate,
+  draggable window. (It was always movable; the default position
+  just hid that fact.)
+* **Quit-error fix** (issue #8). Stopped doing a full MinHook
+  uninstall on process detach. The process is dying anyway; the
+  uninstall raced the game's own DX12 / DXGI tear-down and produced
+  the exit error dialog. Lean shutdown now.
+
 ## What's new in 0.4.5
 
 The 0.4.4 logs showed the crash pattern: combat starts, a sudden
