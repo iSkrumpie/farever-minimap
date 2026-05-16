@@ -6,12 +6,15 @@
 A drop-in overlay for Farever (Shiro Games) with two tools in one DLL:
 
 * **Minimap**: compass with a heading arrow, world mosaic underneath,
-  and the POIs the game already knows about (obelisks, respawn
-  points, dungeons, world activities, merchants).
+  the POIs the game already tracks (obelisks, respawn points,
+  dungeons, world activities, merchants), and 800+ optional
+  collectible markers (chests, red orbs, plants, ores) you can
+  toggle in.
 * **DPS meter**: per-skill damage table with real in-game icons,
   fight history, and combat-state tracking. Only counts the damage
-  numbers the game itself shows above mobs, so other party members
-  and ambient world damage are out of the picture by construction.
+  numbers the game itself shows above mobs, so other party members,
+  ambient world damage and bleeds on you are out of the picture by
+  construction.
 
 ## How to install
 
@@ -48,19 +51,42 @@ To remap, click the small key icon on the minimap bezel. A
 key you want, done. The binding is written to `data\keybinds.json`
 so it persists across restarts. Esc cancels a rebind in progress.
 
-The minimap bezel buttons, going around the rim:
+The minimap bezel buttons (and yes, you can drag them around the
+rim to wherever you like, see Layout below):
 
 * Pin: hold and drag to move the minimap around the screen
 * Square: cycles three sizes (small, medium, large)
 * Funnel: opens the POI filter panel
+* Padlock: locks / unlocks the whole overlay layout
 * Key: opens the hotkey rebind window
+* Chest: toggles all four collectible categories at once
 * Plus and Minus: zoom between roughly 10x and 20x
 * Minus on top: shrinks the minimap to a small puck; click the puck
   to expand it again
 
-The DPS window has the standard ImGui title-bar collapse arrow on
-the left, so you can shrink it to just the title row when you want
-it out of the way. Drag the title bar to move it.
+The DPS window has a custom padlock toggle at the very start of the
+status line that does the same job as the bezel padlock. Clicking
+either locks every overlay window in place. The standard ImGui
+title-bar collapse arrow on the left also shrinks the window to one
+row when you want it out of the way. Drag the title bar to move.
+
+## Collectibles
+
+The minimap also knows about 821 collectible spawn points across
+the W1 world: 147 chests, 199 Red Orbs (the secret-world ones),
+311 plants and 264 ore nodes. They are off by default. Toggle them
+all at once with the chest button on the bezel, or pick categories
+individually in the filter panel.
+
+To mark a chest or red orb as "done", **right-click it on the
+minimap**. The icon stays visible but dims, and the filter panel
+shows a "12 / 147" counter so completionists know how many are
+left. The done set is written to `data\poi_done.json` and persists
+across sessions. Plants and ores respawn, so they have no counter
+and can't be marked done.
+
+POI icons grow about 80% on mouse hover, which makes hitting the
+right one much easier when several are stacked.
 
 ## DPS meter
 
@@ -75,6 +101,11 @@ it out of the way. Drag the title bar to move it.
   `isInCombat` flag, so dodging or blocking without dealing damage
   keeps the fight open instead of prematurely sealing it.
 
+* **Bleeds and incoming damage are filtered out**. Every floating
+  damage number whose target is your own character (mob hits,
+  ground AoE, DOTs on you) is dropped before it reaches the meter,
+  so the totals are exclusively your outgoing damage.
+
 * **Fight history**: a collapsible block under the live table shows
   the last 10 sealed fights, with time, duration, total damage and
   DPS for each. Click a row to open a detail window with the full
@@ -84,9 +115,22 @@ it out of the way. Drag the title bar to move it.
   drop progressively (Crit%, Max, Hits, Total, %). At the narrowest
   size you get just the icon and the DPS column.
 
-* **Window positions persist** across sessions in
-  `data\farever_layout.ini`. Drag your DPS and minimap wherever
-  you like once; they will come back there next time.
+## Layout
+
+Click the padlock (either on the minimap bezel or in the DPS-meter
+status line) to lock the overlay. While locked, nothing moves:
+title-bar drags, the minimap pin, and the bezel button right-drag
+described next are all disabled. Click the padlock again to unlock.
+
+While unlocked, **right-click and drag** on any bezel button to
+slide it around the minimap rim. Useful if you want the most-used
+buttons in a different spot than the defaults. The layout is saved
+to `data\ui_state.json` together with the lock flag. Delete that
+file to reset to defaults.
+
+Window positions for the DPS meter, the minimap, the hotkeys window
+and the fight-detail view are saved to `data\farever_layout.ini`.
+Drag your windows wherever once; they come back there next time.
 
 ## Troubleshooting
 
