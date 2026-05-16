@@ -115,6 +115,35 @@ right one much easier when several are stacked.
   drop progressively (Crit%, Max, Hits, Total, %). At the narrowest
   size you get just the icon and the DPS column.
 
+## Atlas (prototype, v0.4.1)
+
+New in 0.4.1: a built-in catalog of every item, unit, dungeon and
+skill in the game, pulled from the localized CDB that ships in
+`res.pak`. Click the **book button on the minimap bezel** to open it.
+
+Four tabs:
+
+* **Ausrüstung**: 462 equipment items with German names, flavor
+  text and slot info, sub-filtered by Waffen / Rüstung / Schmuck.
+* **Units**: 357 enemies and NPCs (every named boss is in here:
+  Krabbzilla, Königin Honigzabeth, König Ratsar, Fürstin Biene...).
+* **Aktivitäten**: 122 activities, dungeons and world events.
+* **Skills**: 576 skills with names and flavor.
+
+Items show their full icon and stats (level, iLevel, Rarität,
+Verkaufspreis) once you have actually seen the item in the game
+once - in an inventory, a vendor, a chest drop or on the ground.
+Those captures persist to `data\item_captures.tsv` and grow
+incrementally across sessions, so the longer you play with the mod
+the more populated the atlas gets. Items you have not encountered
+yet still show name and flavor text, just no icon or numbers.
+
+**This is a prototype.** Drop sources ("which boss drops what")
+are not wired in yet; that's the next step. Expect occasional
+captures that fail to resolve an icon for the more unusual item
+types (mounts, gliders, cosmetics) - those use a different
+asset path than the equipment atlas.
+
 ## Layout
 
 Click the padlock (either on the minimap bezel or in the DPS-meter
@@ -144,6 +173,28 @@ dungeon load, give it ten or fifteen seconds. The mod waits for
 the new player Hero to spawn on the client and locks onto it as
 soon as the allocation comes through, which on slow loads can take
 a bit longer than the loading screen itself.
+
+If the game still crashes after a while with this version, please
+zip the `farever-mod.log` file from your Farever folder (close the
+game first, do not restart it - the log gets overwritten on launch)
+and open an issue with the file attached. The log records what the
+mod was doing at the moment of the crash and is the fastest way to
+narrow the cause.
+
+## What's new in 0.4.1
+
+This is a stability-focused update on top of 0.4.
+
+* Hardened every long-lived pointer cache against the Boehm GC's
+  slot-reuse pattern, which was responsible for the dungeon-entry
+  access violations a few users reported. Every entity, chest and
+  item the mod tracks is now compared against its expected HashLink
+  type before any field is read; mismatches drop the pointer silently
+  instead of walking a freed slot.
+* Bounded all GPU fence waits on the texture loader to 2 seconds
+  (previously unbounded), so a stalled atlas load can never freeze
+  the game's Present.
+* Added the Atlas window described above as a prototype.
 
 ## Notes
 
