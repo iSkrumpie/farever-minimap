@@ -5,18 +5,18 @@
 
 A drop-in overlay for Farever (Shiro Games) that bundles two tools:
 
-* **Minimap** — compass with a heading arrow, the world mosaic
+* **Minimap**: a compass with a heading arrow, the world mosaic
   underneath, and the points of interest the game already tracks
   (obelisks, respawn points, dungeons, world activities, merchants).
-* **DPS meter** — per-skill damage table that follows the in-game
+* **DPS meter**: a per-skill damage table that follows the in-game
   floating damage numbers, so it only counts what the game itself
   shows you.
 
 ## How to install
 
 1. Download the latest `.zip` from the [Releases page](../../releases).
-2. Extract its contents straight into your Farever folder — the one
-   that contains `Farever.exe`, typically
+2. Extract its contents straight into your Farever folder, the one
+   that contains `Farever.exe`. Typically that's
    `C:\Program Files (x86)\Steam\steamapps\common\Farever`.
    You should end up with `dinput8.dll` and a `data\` folder sitting
    next to the game's executable.
@@ -61,8 +61,8 @@ restart to recover from a bad transition.
 
 The DPS meter only counts damage the game would normally display to
 you (the floating numbers above mobs). Other party members' damage
-and ambient world damage are filtered out at the source — there is
-nothing to configure.
+and ambient world damage are filtered out at the source, so there
+is nothing to configure.
 
 ## Notes
 
