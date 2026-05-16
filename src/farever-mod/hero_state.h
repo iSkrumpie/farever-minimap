@@ -9,6 +9,7 @@ struct HeroSnapshot {
     bool   locked;          // false until isMe + bidirectional check passes
     double x, y, z;
     double rot_z;
+    bool   in_combat;       // ent.Hero.isInCombat (HBOOL @ +672)
 };
 
 // Register the ent.Hero alloc-hook watcher. The watcher pushes raw

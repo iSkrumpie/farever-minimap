@@ -65,3 +65,9 @@ venv/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Release artifacts
+release-staging/
+
+# Claude Code workspace
+.claude/

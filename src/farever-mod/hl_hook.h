@@ -28,4 +28,11 @@ void hl_hook_uninstall();
 // the cache learns).
 void hl_hook_register(const wchar_t* class_name, AllocCallback cb);
 
+// Look up the hl_type* cached for a registered class. Returns 0 until
+// at least one allocation of that class has flowed through dispatch.
+// Used by hero_state to drive a heap rescan after a lock drop —
+// dungeon exits can reuse an existing Hero without firing a fresh
+// alloc, so the rescan is the only way to find it again.
+std::uintptr_t hl_hook_get_type(const wchar_t* class_name);
+
 }  // namespace farever

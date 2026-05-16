@@ -11,6 +11,7 @@ add_library(farever_mod SHARED
     hero_state.cpp
     textures.cpp
     pois.cpp
+    skill_resolve.cpp
     overlay.cpp
     d3d12_hook.cpp
     dinput8.def

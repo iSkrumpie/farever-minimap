@@ -12,6 +12,7 @@
 // destabilised the engine (see feedback_hashlink_pump_thread.md).
 
 #include "damage.h"
+#include "skill_resolve.h"
 #include "hl_hook.h"
 #include "mem_scan.h"
 #include "log.h"
@@ -124,10 +125,15 @@ bool try_decode(std::uintptr_t dd_ptr, DamageEvent* out) {
         return true;
     }
 
+    // _hitCount on DamageResult is a running tick ordinal for the
+    // owning BaseSkill, not the number of hits in this DR. Channeled
+    // skills tick it 1, 2, 3, ... per hit. We use it only as a
+    // signedness sanity-check + uninitialised filter; the aggregator
+    // counts each event as exactly one hit.
     std::int32_t hits = 0;
     if (!mem_read_i32(dr_ptr + OFF_DR_HITCOUNT, &hits)) return false;
     if (hits == 0) return false;
-    if (hits < 1 || hits > 50) {
+    if (hits < 1 || hits > 10000) {
         g_dropped_garbage.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -146,6 +152,21 @@ bool try_decode(std::uintptr_t dd_ptr, DamageEvent* out) {
     if (!decode_skill_name(dr_ptr, skill)) {
         g_dropped_garbage.fetch_add(1, std::memory_order_relaxed);
         return true;
+    }
+
+    // Resolve the BaseSkill -> CDB record once per kind. Failure is
+    // expected for early ticks (libhl exports may not have resolved
+    // yet) and for skills whose `inf` virtual hasn't been initialised
+    // yet — the next event for the same kind will retry.
+    SkillGfx gfx{};
+    if (!skill_resolve_lookup(skill, &gfx)) {
+        std::uint64_t bs_u64 = 0;
+        if (mem_read_u64(dr_ptr + OFF_DR_BASESKILL, &bs_u64)) {
+            if (skill_resolve_query(
+                    static_cast<std::uintptr_t>(bs_u64), &gfx)) {
+                skill_resolve_cache(skill, gfx);
+            }
+        }
     }
 
     out->dr_ptr    = dr_ptr;         // dedupe by DR so multiple DDs on

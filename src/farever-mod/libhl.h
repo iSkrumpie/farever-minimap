@@ -32,6 +32,23 @@ struct LibHL {
     void* hl_unregister_thread = nullptr;
     void* hl_blocking          = nullptr;
 
+    // Dynamic field accessors — used by the skill-icon resolver to walk
+    // BaseSkill.inf.gfx (HVIRTUAL chain in HashLink terms). Signatures:
+    //   void*  hl_dyn_getp(vdynamic* d, int hashed_name, hl_type* result_type);
+    //   int    hl_dyn_geti(vdynamic* d, int hashed_name, hl_type* result_type);
+    //   int    hl_hash_utf8(const char* utf8_name);
+    //   int    hl_hash_gen(uchar* name, bool cache);  // not used today
+    void* hl_dyn_getp = nullptr;
+    void* hl_dyn_geti = nullptr;
+    void* hl_hash_utf8 = nullptr;
+
+    // Built-in type singletons exported by libhl. We need at least
+    //   hlt_bytes, hlt_i32, hlt_dyn
+    // to use as result_type when fetching fields.
+    void* hlt_bytes = nullptr;
+    void* hlt_i32   = nullptr;
+    void* hlt_dyn   = nullptr;
+
     void* libhl_base        = nullptr;   // HMODULE
 };
 

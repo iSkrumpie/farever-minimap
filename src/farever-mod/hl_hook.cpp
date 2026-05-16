@@ -39,8 +39,9 @@ using PFN_hl_alloc_obj = std::uintptr_t (*)(std::uintptr_t /*hl_type* t*/);
 PFN_hl_alloc_obj g_orig = nullptr;
 
 struct Watcher {
-    std::wstring  class_name;
-    AllocCallback cb;
+    std::wstring   class_name;
+    AllocCallback  cb;
+    std::uintptr_t type_ptr = 0;   // filled in on first allocation
 };
 
 std::mutex                              g_mu;
@@ -106,6 +107,7 @@ void dispatch(std::uintptr_t type_ptr, std::uintptr_t obj) {
                 logf("hl_hook: cached '%ls' -> hl_type* 0x%llx",
                      name ? name : L"<null>",
                      static_cast<unsigned long long>(type_ptr));
+                g_watchers[idx].type_ptr = type_ptr;
                 cb = g_watchers[idx].cb;
             }
         }
@@ -124,7 +126,7 @@ std::uintptr_t hook_alloc_obj(std::uintptr_t type_ptr) {
 void hl_hook_register(const wchar_t* class_name, AllocCallback cb) {
     if (!class_name || !cb) return;
     std::lock_guard<std::mutex> lk(g_mu);
-    g_watchers.push_back({class_name, cb});
+    g_watchers.push_back({class_name, cb, 0});
     // Invalidate negative cache entries — a previously-learned type
     // might match this newly registered class. (Positive entries can
     // only become more inclusive, never wrong, so we leave them.)
@@ -132,6 +134,15 @@ void hl_hook_register(const wchar_t* class_name, AllocCallback cb) {
         if (it->second < 0) it = g_type_to_idx.erase(it); else ++it;
     }
     logf("hl_hook: registered watcher for '%ls'", class_name);
+}
+
+std::uintptr_t hl_hook_get_type(const wchar_t* class_name) {
+    if (!class_name) return 0;
+    std::lock_guard<std::mutex> lk(g_mu);
+    for (const auto& w : g_watchers) {
+        if (w.class_name == class_name) return w.type_ptr;
+    }
+    return 0;
 }
 
 bool hl_hook_install(const LibHL& libhl) {

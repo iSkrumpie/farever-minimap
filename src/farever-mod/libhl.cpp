@@ -48,6 +48,18 @@ bool libhl_wait_and_resolve(LibHL* out) {
         GetProcAddress(libhl, "hl_unregister_thread"));
     out->hl_blocking         = reinterpret_cast<void*>(
         GetProcAddress(libhl, "hl_blocking"));
+    out->hl_dyn_getp         = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hl_dyn_getp"));
+    out->hl_dyn_geti         = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hl_dyn_geti"));
+    out->hl_hash_utf8        = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hl_hash_utf8"));
+    out->hlt_bytes           = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hlt_bytes"));
+    out->hlt_i32             = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hlt_i32"));
+    out->hlt_dyn             = reinterpret_cast<void*>(
+        GetProcAddress(libhl, "hlt_dyn"));
 
     logf("libhl: hl_alloc_obj=%p hl_alloc_dynamic=%p hl_alloc_dynobj=%p "
          "hl_alloc_array=%p hl_gc_dump_memory=%p "
@@ -56,6 +68,10 @@ bool libhl_wait_and_resolve(LibHL* out) {
          out->hl_alloc_array, out->hl_gc_dump_memory,
          out->hl_register_thread, out->hl_unregister_thread,
          out->hl_blocking);
+    logf("libhl: hl_dyn_getp=%p hl_dyn_geti=%p hl_hash_utf8=%p "
+         "hlt_bytes=%p hlt_i32=%p hlt_dyn=%p",
+         out->hl_dyn_getp, out->hl_dyn_geti, out->hl_hash_utf8,
+         out->hlt_bytes, out->hlt_i32, out->hlt_dyn);
 
     if (!out->hl_alloc_obj) {
         logf("libhl: FATAL hl_alloc_obj not exported — wrong libhl version?");
