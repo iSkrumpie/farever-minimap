@@ -152,6 +152,25 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.4
+
+Continued stability work after 0.4.3. Disabled the entity tracker
+(chests / gather nodes / obelisks) entirely. The 0.4.3 logs showed
+it was still slipping past the type-anchor guard and reading
+random strings out of the engine's string pool (shader uniform
+names, FMOD event paths, prefab paths) on long sessions — the
+same pattern that correlates with the recurring
+`DX12Driver.present` crash. Cutting it out removes that read
+path completely.
+
+What you lose: the minimap no longer auto-dims chests and red
+orbs you've already looted. Use the right-click toggle on the
+minimap to mark them done manually (still persists to
+`data\poi_done.json` across sessions).
+
+What you keep: everything else. Minimap, POI filter, hotkeys,
+DPS meter, fight history, the lot.
+
 ## What's new in 0.4.3
 
 Removed the experimental Atlas window. It was an item / boss /
@@ -168,10 +187,6 @@ delete:
 * `data\cdb_atlas*.tsv`
 * `data\item_captures.tsv`
 * `data\portraits\` (the whole folder; ~70 MB)
-
-Nothing else changed in this release. The 0.4.2 stability fixes
-(entity_state type-anchor + throttle, bounded GPU fence waits in
-the texture loader) are still in.
 
 ## What's new in 0.4.2
 
