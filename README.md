@@ -115,24 +115,27 @@ right one much easier when several are stacked.
   drop progressively (Crit%, Max, Hits, Total, %). At the narrowest
   size you get just the icon and the DPS column.
 
-## Atlas (prototype, v0.4.1)
+## Atlas (prototype)
 
-New in 0.4.1: a built-in catalog of every item, unit, dungeon and
-skill in the game, pulled from the localized CDB that ships in
-`res.pak`. Click the **book button on the minimap bezel** to open it.
+A built-in catalog of every item, unit, dungeon and skill in the
+game, pulled from the localized CDB that ships in `res.pak`. Click
+the **book button on the minimap bezel** to open it.
 
-Tab labels inside the mod stay in German because that's the
-localization we read out of the game's CDB; the English mapping is:
+Four tabs (English UI):
 
-* **Ausrüstung** (Equipment): 462 items with names, flavor text
-  and slot info, sub-filtered by Waffen (weapons) / Rüstung
-  (armor) / Schmuck (jewelry).
-* **Units**: 357 enemies and NPCs. Every named boss is in here:
-  Krabbzilla, Königin Honigzabeth, König Ratsar, Fürstin Biene,
-  Munster Truk, Phrixes.
-* **Aktivitäten** (Activities): 122 activities, dungeons and
-  world events.
+* **Equipment**: 462 items, sub-filtered by All / Weapons / Armor
+  / Accessories.
+* **Units**: 357 enemies and NPCs. Every named boss is in here.
+* **Activities**: 122 activities, dungeons and world events.
 * **Skills**: 576 skills with names and flavor.
+
+A language picker at the top of the window switches the catalog
+between de, es, fr, ja, ko, pl, pt-BR, ru and zh, plus a
+synthetic en fallback (English isn't shipped as a separate
+localization in the game; the fallback shows pretty-printed CDB
+IDs instead). Default is en. Each language is a separate TSV file
+in `data\` (~150-200 KB each); delete the ones you don't want to
+trim the install.
 
 Items show their icon and stats (level, iLevel, rarity, sell
 price) once you have actually seen the item in the game once,
@@ -185,9 +188,29 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.2
+
+A further stability pass on top of 0.4.1, plus Atlas multi-language.
+
+* Throttled the entity tracker (chests / gather nodes / obelisks)
+  to run every fourth render frame instead of every frame. The
+  per-entity memory probes added up to a few thousand reads per
+  second on long sessions; the discovered set is only sampled by
+  the minimap, so quartering the rate is invisible to the user but
+  meaningfully relieves the render-thread budget.
+* Removed the 30-second verbose "snapshot" log dump from the entity
+  tracker. It burst 100+ synchronous `fflush` calls into a single
+  render frame, which under load could race the game's own Present
+  submission. Per-entity transition and first-sight logs are kept.
+* Atlas now ships nine language TSVs (de / es / fr / ja / ko / pl /
+  pt-BR / ru / zh) plus a synthetic en fallback. The Atlas window
+  has a language picker at the top; selection is process-local for
+  now. UI chrome (tab labels, buttons, hints) was translated to
+  English.
+
 ## What's new in 0.4.1
 
-This is a stability-focused update on top of 0.4.
+Stability-focused update on top of 0.4.
 
 * Hardened every long-lived pointer cache against the Boehm GC's
   slot-reuse pattern, which was responsible for the dungeon-entry
@@ -198,7 +221,7 @@ This is a stability-focused update on top of 0.4.
 * Bounded all GPU fence waits on the texture loader to 2 seconds
   (previously unbounded), so a stalled atlas load can never freeze
   the game's Present.
-* Added the Atlas window described above as a prototype.
+* Added the Atlas window as a prototype.
 
 ## Notes
 
