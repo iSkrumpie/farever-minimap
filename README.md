@@ -121,18 +121,22 @@ New in 0.4.1: a built-in catalog of every item, unit, dungeon and
 skill in the game, pulled from the localized CDB that ships in
 `res.pak`. Click the **book button on the minimap bezel** to open it.
 
-Four tabs:
+Tab labels inside the mod stay in German because that's the
+localization we read out of the game's CDB; the English mapping is:
 
-* **Ausrüstung**: 462 equipment items with German names, flavor
-  text and slot info, sub-filtered by Waffen / Rüstung / Schmuck.
-* **Units**: 357 enemies and NPCs (every named boss is in here:
-  Krabbzilla, Königin Honigzabeth, König Ratsar, Fürstin Biene...).
-* **Aktivitäten**: 122 activities, dungeons and world events.
+* **Ausrüstung** (Equipment): 462 items with names, flavor text
+  and slot info, sub-filtered by Waffen (weapons) / Rüstung
+  (armor) / Schmuck (jewelry).
+* **Units**: 357 enemies and NPCs. Every named boss is in here:
+  Krabbzilla, Königin Honigzabeth, König Ratsar, Fürstin Biene,
+  Munster Truk, Phrixes.
+* **Aktivitäten** (Activities): 122 activities, dungeons and
+  world events.
 * **Skills**: 576 skills with names and flavor.
 
-Items show their full icon and stats (level, iLevel, Rarität,
-Verkaufspreis) once you have actually seen the item in the game
-once - in an inventory, a vendor, a chest drop or on the ground.
+Items show their icon and stats (level, iLevel, rarity, sell
+price) once you have actually seen the item in the game once,
+in an inventory, on a vendor, in a chest drop or on the ground.
 Those captures persist to `data\item_captures.tsv` and grow
 incrementally across sessions, so the longer you play with the mod
 the more populated the atlas gets. Items you have not encountered
