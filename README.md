@@ -152,6 +152,35 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.5
+
+The 0.4.4 logs showed the crash pattern: combat starts, a sudden
+burst of damage events arrives (one Mage_Conduit_Projectile
+channel produced ~65 `DamageDisplay` allocs in 11 seconds), and a
+few seconds later Present trips. 0.4.5 spreads that burst out
+instead of letting damage_tick process the whole queue in one
+render frame.
+
+Changes:
+
+* `damage_tick` now processes at most 4 events per render frame.
+  A burst of 65 events drains over ~16 frames instead of in one
+  ~10 ms tick. DPS numbers update at the same rate they always
+  did because the display is sampled, not realtime.
+* The pending-damage queue is now capped at 256 entries. If a
+  combat burst overruns that, the oldest entries get dropped
+  instead of growing the queue without bound. You lose a tiny bit
+  of DPS-tracking accuracy in the extreme case and gain a hard
+  ceiling on render-thread work.
+* Added an overlay-render heartbeat that logs "overlay: alive @
+  tick N" every 600 frames. Combined with the existing damage
+  heartbeat this lets a post-crash log pinpoint whether the
+  freeze hit before or after our overlay submission.
+
+If the crash still happens on 0.4.5, please attach the
+`farever-mod.log` to the issue -- the new heartbeat lines tell
+me which sub-stage of the frame died.
+
 ## What's new in 0.4.4
 
 Continued stability work after 0.4.3. Disabled the entity tracker
