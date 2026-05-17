@@ -152,6 +152,42 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.5.2.1
+
+Small patch release on top of 0.5.2, two user-visible fixes plus a
+diagnostic improvement:
+
+* **UI text scale slider**
+  ([#22](https://github.com/ramisotti13-eng/farever-minimap/issues/22)).
+  EpicTragedy reported that on a 48 inch 4K monitor the overlay text
+  and icons are too small to read. Added a "UI scale (text)" slider
+  to the filter tablet (the bezel funnel button). Range 0.50x to
+  2.50x, default 1.00x, persisted across sessions in
+  `ui_state.json`. Hand-drawn bezel icons keep their pixel size by
+  design, this only scales rendered text (DPS table, Hotkeys panel,
+  Fight Detail, tooltips). 2.0x or 2.5x is the right ballpark for
+  4K + large display.
+
+* **DXGI composition swap chain fallback**
+  ([#20](https://github.com/ramisotti13-eng/farever-minimap/issues/20),
+  [#21](https://github.com/ramisotti13-eng/farever-minimap/issues/21)).
+  Two users hit `CreateSwapChainForComposition` failing with
+  `0x887A0001` (DXGI_ERROR_INVALID_CALL) on game launch, so the
+  overlay never came up even though the game itself ran fine.
+  Composition swap chains have stricter format / swap-effect
+  requirements than regular DX12 swap chains and some older GPU
+  drivers reject specific combos. 0.5.2.1 tries three descriptor
+  variants in sequence (BGRA + flip-discard, RGBA + flip-discard,
+  BGRA + flip-sequential), the first one the driver accepts wins.
+  If all three fail the log says so clearly so the issue is at least
+  visible.
+
+* **Adapter info logged at startup**. `farever-mod.log` now records
+  the GPU name, vendor / device IDs, and VRAM at the moment the
+  overlay's D3D12 device is created. Makes "overlay does not show
+  up" issues much faster to diagnose because the GPU + driver combo
+  is right there in the log.
+
 ## What's new in 0.5.2
 
 Polish pass on top of the 0.5.1 stability win. Same DCOMP
