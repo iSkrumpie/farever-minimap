@@ -152,6 +152,50 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.5.1
+
+Five small follow-ups to the 0.5 architectural rewrite, all
+addressing UX and compat issues that surfaced once users had a
+stable build to play on:
+
+* **Hotkeys window now shows the bound keys again** ([#17](https://github.com/ramisotti13-eng/farever-minimap/issues/17)).
+  The labels were empty in 0.5 due to a dangling-pointer bug
+  (`key_to_name(vk).c_str()` returned a pointer into a temporary
+  std::string that died at the end of the expression). Bound to a
+  named local now.
+
+* **Smart click-through** ([#7](https://github.com/ramisotti13-eng/farever-minimap/issues/7)).
+  Clicks on the compass mosaic, empty DPS table cells, and other
+  decorative overlay pixels now pass through to the game — you can
+  attack a mob standing behind your compass. Clicks on actual
+  interactive widgets (bezel buttons, title bars, fight-history
+  rows) still get captured by the overlay so dragging and toggling
+  work as before. Implementation: the wndproc check switched from
+  ImGui's coarse `io.WantCaptureMouse` (any window) to
+  `IsAnyItemHovered() || IsAnyItemActive()` (only interactive
+  items).
+
+* **F7 / F11 split**. 0.5 inadvertently bound F11 to both overlay
+  show/hide (in the render thread) and the legacy click-through
+  toggle (in the wndproc). Same keypress hit both paths. Split:
+  **F7 = overlay show/hide**, **F11 = click-through toggle** (back
+  to its pre-0.5 behaviour).
+
+* **Audio no longer chops on game quit** ([#18](https://github.com/ramisotti13-eng/farever-minimap/issues/18) part 2).
+  Pre-0.5.1 DllMain DETACH did a minimal shutdown and left the
+  overlay-window render thread to be force-killed at process exit,
+  which released GPU resources hard and stuttered the system audio
+  driver for 5-10 s. 0.5.1 cleanly stops the render thread + frees
+  D3D12/DCOMP resources before the process dies.
+
+* **Steam notifications don't glitch any more during character
+  select** ([#18](https://github.com/ramisotti13-eng/farever-minimap/issues/18) part 1).
+  The DCOMP visual was getting created at game-boot, racing
+  Steam's notification animation engine. 0.5.1 waits for the first
+  hero lock before bringing the visual up. By then character
+  select is over and Steam's notifications have finished their
+  lifecycle naturally.
+
 ## What's new in 0.5
 
 **This is the release where the recurring `DX12Driver.present line 3306` AV crash is actually fixed**, after a full day of incremental versions and bisection on the affected users' logs (see [#11](https://github.com/ramisotti13-eng/farever-minimap/issues/11) / [#12](https://github.com/ramisotti13-eng/farever-minimap/issues/12) / [#16](https://github.com/ramisotti13-eng/farever-minimap/issues/16)).
