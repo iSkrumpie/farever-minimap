@@ -152,6 +152,50 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.13
+
+Two unrelated things.
+
+**Issue #15**: the minimap's padlock was also locking the DPS /
+fight-history window, which made no sense -- you'd lock the
+minimap so it stops drifting during combat and then couldn't move
+the DPS window any more. The DPS window now has its own lock
+flag, toggled by the padlock icon at the start of its status line.
+The minimap bezel padlock controls only the minimap. Both states
+are persisted independently in `data\ui_state.json`.
+
+**Issues #12 / #16**: the v0.4.12 skeleton-mode log proved the
+draw-volume hypothesis wrong -- the crash hit at tick 4200 with
+`submitted=0` in the heartbeat counter, meaning the AV happened
+while our overlay was still paused and we hadn't sent a single
+command list to the game queue. The only thing we were still
+doing at that moment was the HL-side read pipeline
+(`hl_alloc_obj` watcher + `damage_tick` + `hero_state_tick` on
+the render thread). v0.4.13 adds two environment-variable kill
+switches so the affected users can bisect:
+
+```
+set FAREVER_NO_OVERLAY=1   :: skip ImGui init + D3D submit,
+                          :: keep HL reads. Minimap + DPS window
+                          :: are invisible while this is set.
+set FAREVER_NO_HL_TICK=1   :: skip damage + hero_state watchers,
+                          :: hl_alloc_obj trampoline still loads
+                          :: but dispatcher has no callbacks.
+                          :: Overlay still runs (mostly empty).
+```
+
+Set either or both in the environment that launches `Farever.exe`
+(easiest via a `.bat` file: `set FAREVER_NO_OVERLAY=1` then
+`start "" "%STEAM%\steamapps\common\Farever\Farever.exe"`). The
+mod log gets a line `worker: kill switches overlay=OFF hl_tick=ON`
+right after boot so you can confirm the switch is engaged, and
+the overlay also emits a `killed @ tick N` heartbeat every 600
+ticks while suppressed so the log proves the Present hook is
+firing.
+
+Useful only for users hitting the recurring `DX12Driver.present`
+AV. If your build is stable, do not set these.
+
 ## What's new in 0.4.12
 
 Follow-up for issue #12. The 5 s pause from v0.4.10 delayed the
