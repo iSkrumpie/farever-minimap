@@ -152,6 +152,31 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.12
+
+Follow-up for issue #12. The 5 s pause from v0.4.10 delayed the
+crash by exactly the extra pause time but the AV still hit roughly
+9 s after our overlay actually started submitting. So the trigger
+isn't a fixed time after hero lock; it's a fixed time after we
+start rendering on top. That points at the draw-call volume on the
+affected hardware -- the minimap dumps 1000+ AddImage / AddCircle
+calls into ImGui on the first full frame (mosaic + every POI).
+
+0.4.12 adds a **skeleton phase** after the existing pause. For 10
+seconds after a hero lock or large position jump, the minimap
+renders only the bezel ring + player arrow + buttons -- no mosaic
+image, no POI markers. The full minimap snaps in after that.
+Total quiet-time after a transition is ~5 s pause + ~10 s skeleton
+= 15 s before the heavy draw kicks in. From the user's side this
+looks like an empty compass for the first quarter-minute after a
+zone change, then the map content arrives.
+
+If the affected user's setup tolerates the skeleton phase, we know
+the heavy ImGui draw is the trigger and can fix it properly --
+e.g. spread POI rendering across frames or pre-bake the POI layer.
+If the crash still hits in skeleton mode, the bug lives deeper
+than ImGui geometry and we need a different mitigation.
+
 ## What's new in 0.4.11
 
 Bug fix for click-through (issue #14). The v0.4.7 implementation
