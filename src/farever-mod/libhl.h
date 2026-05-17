@@ -36,10 +36,12 @@ struct LibHL {
     // BaseSkill.inf.gfx (HVIRTUAL chain in HashLink terms). Signatures:
     //   void*  hl_dyn_getp(vdynamic* d, int hashed_name, hl_type* result_type);
     //   int    hl_dyn_geti(vdynamic* d, int hashed_name, hl_type* result_type);
+    //   double hl_dyn_getd(vdynamic* d, int hashed_name);
     //   int    hl_hash_utf8(const char* utf8_name);
     //   int    hl_hash_gen(uchar* name, bool cache);  // not used today
     void* hl_dyn_getp = nullptr;
     void* hl_dyn_geti = nullptr;
+    void* hl_dyn_getd = nullptr;
     void* hl_hash_utf8 = nullptr;
 
     // Built-in type singletons exported by libhl. We need at least

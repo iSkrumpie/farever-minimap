@@ -44,10 +44,16 @@ struct Watcher {
     std::uintptr_t type_ptr = 0;   // filled in on first allocation
 };
 
-std::mutex                              g_mu;
-std::vector<Watcher>                    g_watchers;        // append-only, never reordered
-std::unordered_map<std::uintptr_t, int> g_type_to_idx;     // -1 = no match
-std::atomic<bool>                       g_installed{false};
+// Per-type dispatch list. Multiple watchers can register for the same
+// class name; all matching callbacks fire (in registration order).
+struct Dispatch {
+    std::vector<AllocCallback> cbs;
+};
+
+std::mutex                                   g_mu;
+std::vector<Watcher>                         g_watchers;        // append-only, never reordered
+std::unordered_map<std::uintptr_t, Dispatch> g_type_to_disp;    // empty cbs = no match
+std::atomic<bool>                            g_installed{false};
 
 // Read the class name from hl_type.obj.name without faulting. The
 // pointer is owned by libhl and lives for the process lifetime, so
@@ -82,37 +88,39 @@ int wstr_equals(const wchar_t* a, const wchar_t* b) {
 
 void dispatch(std::uintptr_t type_ptr, std::uintptr_t obj) {
     if (!obj) return;
-    AllocCallback cb = nullptr;
+    // Snapshot the per-type callback list under lock, then call them
+    // outside the lock — callbacks can take their own mutexes without
+    // risking inversion against hl_hook's.
+    std::vector<AllocCallback> to_call;
     {
         std::lock_guard<std::mutex> lk(g_mu);
-        auto it = g_type_to_idx.find(type_ptr);
-        if (it != g_type_to_idx.end()) {
-            int idx = it->second;
-            if (idx < 0) return;                  // negatively cached
-            cb = g_watchers[idx].cb;
+        auto it = g_type_to_disp.find(type_ptr);
+        if (it != g_type_to_disp.end()) {
+            if (it->second.cbs.empty()) return;   // negatively cached
+            to_call = it->second.cbs;
         } else {
             // Learn this type.
             const wchar_t* name = read_class_name(type_ptr);
-            int idx = -1;
+            Dispatch d;
             if (name) {
                 for (std::size_t i = 0; i < g_watchers.size(); ++i) {
                     if (wstr_equals(name, g_watchers[i].class_name.c_str())) {
-                        idx = static_cast<int>(i);
-                        break;
+                        d.cbs.push_back(g_watchers[i].cb);
+                        g_watchers[i].type_ptr = type_ptr;
                     }
                 }
             }
-            g_type_to_idx.emplace(type_ptr, idx);
-            if (idx >= 0) {
-                logf("hl_hook: cached '%ls' -> hl_type* 0x%llx",
+            if (!d.cbs.empty()) {
+                logf("hl_hook: cached '%ls' -> hl_type* 0x%llx (%zu cb)",
                      name ? name : L"<null>",
-                     static_cast<unsigned long long>(type_ptr));
-                g_watchers[idx].type_ptr = type_ptr;
-                cb = g_watchers[idx].cb;
+                     static_cast<unsigned long long>(type_ptr),
+                     d.cbs.size());
             }
+            to_call = d.cbs;
+            g_type_to_disp.emplace(type_ptr, std::move(d));
         }
     }
-    if (cb) cb(obj);
+    for (AllocCallback cb : to_call) cb(obj);
 }
 
 std::uintptr_t hook_alloc_obj(std::uintptr_t type_ptr) {
@@ -127,12 +135,9 @@ void hl_hook_register(const wchar_t* class_name, AllocCallback cb) {
     if (!class_name || !cb) return;
     std::lock_guard<std::mutex> lk(g_mu);
     g_watchers.push_back({class_name, cb, 0});
-    // Invalidate negative cache entries — a previously-learned type
-    // might match this newly registered class. (Positive entries can
-    // only become more inclusive, never wrong, so we leave them.)
-    for (auto it = g_type_to_idx.begin(); it != g_type_to_idx.end(); ) {
-        if (it->second < 0) it = g_type_to_idx.erase(it); else ++it;
-    }
+    // Invalidate cache entries so already-learned types pick up this
+    // new watcher on next alloc. Cheap; called once per module init.
+    g_type_to_disp.clear();
     logf("hl_hook: registered watcher for '%ls'", class_name);
 }
 

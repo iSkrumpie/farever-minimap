@@ -158,7 +158,8 @@ bool g_filter_open       = false;
 bool g_keys_open         = false;
 bool g_compass_collapsed = false;
 int  g_selected_fight_id = 0;   // 0 = no fight detail open
-std::atomic<bool> g_ui_locked{false};  // when true, all overlay windows refuse to move
+std::atomic<bool> g_ui_locked{false};   // minimap lock: pin + size
+std::atomic<bool> g_dps_locked{false};  // DPS/fight-history window lock (issue #15: independent)
 
 // Bezel button layout — angle (rad) around the compass center, one
 // entry per button. Right-click + drag in render_compass reassigns
@@ -223,6 +224,24 @@ std::wstring data_path(const wchar_t* relative) {
     return s;
 }
 
+// Off-screen rescue: if a window's saved position (from ImGui's ini
+// file or wherever) puts it outside the current viewport, snap it
+// back to a visible spot. Triggered the next time ImGui's
+// SetNextWindowPos(..., ImGuiCond_Always) fires below. Issue #1: a
+// game crash left the minimap saved at the right edge of the
+// screen, the pin handle off-screen, and the user couldn't drag it
+// back. The rescue makes that recoverable instead of permanent.
+bool window_is_offscreen(ImVec2 pos, ImVec2 size, const ImVec2& vp) {
+    // 24 px slack -- the title bar needs to be grabbable even if the
+    // window is right at the edge.
+    const float slack = 24.0f;
+    if (pos.x + size.x < slack)          return true;
+    if (pos.y + size.y < slack)          return true;
+    if (pos.x > vp.x - slack)            return true;
+    if (pos.y > vp.y - slack)            return true;
+    return false;
+}
+
 // Lazy atlas loader. `filename` is just the basename, e.g.
 // "atlas_class_Mage_96PX.png". Looks for the file under data/atlases/
 // (mirror of res.pak's UI/icons/ path). Returns nullptr if the file is
@@ -236,7 +255,6 @@ LoadedTexture* get_or_load_atlas(const char* filename) {
     }
     if (g_next_atlas_slot >= kSkillAtlasSlotMax) return nullptr;
 
-    // Build the on-disk path.
     std::wstring full = dll_dir();
     full += L"\\data\\atlases\\UI\\icons\\";
     int n = MultiByteToWideChar(CP_UTF8, 0, filename, -1, nullptr, 0);
@@ -250,7 +268,7 @@ LoadedTexture* get_or_load_atlas(const char* filename) {
     if (!load_texture_from_file(g_overlay.device, g_overlay.srv_heap,
                                 slot, full.c_str(), &tex)) {
         logf("overlay: atlas %s load failed (slot %u)", filename, slot);
-        g_atlas_cache[key] = LoadedTexture{};  // negative cache
+        g_atlas_cache[key] = LoadedTexture{};
         return nullptr;
     }
     g_next_atlas_slot++;
@@ -331,16 +349,44 @@ void calib_maybe_reload() {
 // raw Virtual-Key code ("toggle_dps": 121). Hot-reloaded on file
 // mtime change, same as the calibration json.
 struct Keybinds {
-    UINT toggle_dps     = VK_F10;
-    UINT toggle_minimap = VK_F8;
-    UINT reset_dps      = VK_F9;
+    UINT toggle_dps         = VK_F10;
+    UINT toggle_minimap     = VK_F8;
+    UINT reset_dps          = VK_F9;
+    UINT toggle_clickthru   = VK_F11;   // issues #4 + #7
+    UINT toggle_dps_track   = VK_F12;   // issue #13
 };
 Keybinds g_keybinds;
+
+// Click-through state (issues #4, #7). When true, our wndproc stops
+// eating mouse messages even when the cursor is over an ImGui window,
+// so attacks / camera rotates aren't intercepted by the overlay.
+// Persisted to ui_state.json alongside the lock flag.
+std::atomic<bool> g_clickthrough{false};
+
+// DPS tracking pause (issue #13). When true, the DamageDisplay
+// alloc-hook callback returns immediately and damage_tick's
+// processing loop short-circuits -- the meter's totals freeze and
+// the per-allocation overhead is reduced to just the MinHook
+// trampoline. Hiding the DPS window via F10 only hides the UI;
+// this flag pauses the backend too.
+std::atomic<bool> g_dps_tracking_paused{false};
+
+// Minimap mosaic + bezel opacity (issue #2). 0.30..1.00; 1.00 = old
+// behaviour. Persisted to ui_state.json.
+float g_minimap_alpha = 1.0f;
+
+// 0.4.12 (issue #12): when true, the minimap renders only the bezel
+// ring + player arrow + buttons -- no mosaic image, no POI markers.
+// Set by overlay_render for the kSkeletonFrames following the post-
+// transition pause, then cleared. Lets us coast past the danger
+// window with a near-zero ImGui draw count.
+std::atomic<bool> g_skeleton_minimap{false};
 
 // In-game rebind: the user clicks a slot in the keys panel, we set
 // this to the slot id, and the next non-modifier key press in
 // overlay_wndproc gets written into that slot (ESC cancels).
-enum class RebindSlot : int { None = 0, Dps = 1, Map = 2, Reset = 3 };
+enum class RebindSlot : int { None = 0, Dps = 1, Map = 2, Reset = 3,
+                              ClickThru = 4, DpsTrack = 5 };
 std::atomic<int> g_rebind_listening{0};
 
 UINT key_from_name(std::string s) {
@@ -483,14 +529,19 @@ void keybinds_maybe_reload() {
     std::string text((std::istreambuf_iterator<char>(f)),
                      std::istreambuf_iterator<char>());
     Keybinds kb = g_keybinds;
-    keybinds_extract_key(text, "toggle_dps",     kb.toggle_dps);
-    keybinds_extract_key(text, "toggle_minimap", kb.toggle_minimap);
-    keybinds_extract_key(text, "reset_dps",      kb.reset_dps);
+    keybinds_extract_key(text, "toggle_dps",         kb.toggle_dps);
+    keybinds_extract_key(text, "toggle_minimap",     kb.toggle_minimap);
+    keybinds_extract_key(text, "reset_dps",          kb.reset_dps);
+    keybinds_extract_key(text, "toggle_clickthru",   kb.toggle_clickthru);
+    keybinds_extract_key(text, "toggle_dps_track",   kb.toggle_dps_track);
     g_keybinds = kb;
-    logf("overlay: keybinds reloaded (dps=%s map=%s reset=%s)",
+    logf("overlay: keybinds reloaded (dps=%s map=%s reset=%s "
+         "clickthru=%s dps_track=%s)",
          key_to_name(kb.toggle_dps).c_str(),
          key_to_name(kb.toggle_minimap).c_str(),
-         key_to_name(kb.reset_dps).c_str());
+         key_to_name(kb.reset_dps).c_str(),
+         key_to_name(kb.toggle_clickthru).c_str(),
+         key_to_name(kb.toggle_dps_track).c_str());
 }
 
 const std::wstring& kUiStatePath() {
@@ -520,6 +571,8 @@ void ui_lock_load() {
                   std::istreambuf_iterator<char>());
     g_ui_locked.store(s.find("\"locked\": true") != std::string::npos ||
                       s.find("\"locked\":true")  != std::string::npos);
+    g_dps_locked.store(s.find("\"dps_locked\": true") != std::string::npos ||
+                       s.find("\"dps_locked\":true")  != std::string::npos);
 
     // Bezel angles — each one optional; defaults stay if absent.
     ui_state_extract_float(s, "pin",      g_bezel.pin);
@@ -531,6 +584,28 @@ void ui_lock_load() {
     ui_state_extract_float(s, "chest",    g_bezel.chest);
     ui_state_extract_float(s, "plus",     g_bezel.plus);
     ui_state_extract_float(s, "minus",    g_bezel.minus);
+
+    // Compass size (0=small, 1=medium, 2=large). Persisted so the
+    // minimap doesn't snap back to "large" every launch (issue #6).
+    float size_idx_f = (float)g_compass_size_idx;
+    ui_state_extract_float(s, "compass_size", size_idx_f);
+    int v = (int)(size_idx_f + 0.5f);
+    if (v < 0) v = 0; else if (v > 2) v = 2;
+    g_compass_size_idx = v;
+
+    // Click-through (issue #4 / #7) and minimap alpha (issue #2).
+    g_clickthrough.store(
+        s.find("\"clickthrough\": true") != std::string::npos ||
+        s.find("\"clickthrough\":true")  != std::string::npos);
+    g_dps_tracking_paused.store(
+        s.find("\"dps_tracking_paused\": true") != std::string::npos ||
+        s.find("\"dps_tracking_paused\":true")  != std::string::npos);
+    float a = g_minimap_alpha;
+    if (ui_state_extract_float(s, "minimap_alpha", a)) {
+        if (a < 0.30f) a = 0.30f;
+        if (a > 1.00f) a = 1.00f;
+        g_minimap_alpha = a;
+    }
 }
 
 void ui_lock_save() {
@@ -540,6 +615,7 @@ void ui_lock_save() {
     if (!f) return;
     f << "{\n"
       << "  \"locked\":   " << (g_ui_locked.load() ? "true" : "false") << ",\n"
+      << "  \"dps_locked\": " << (g_dps_locked.load() ? "true" : "false") << ",\n"
       << "  \"pin\":      " << g_bezel.pin      << ",\n"
       << "  \"size\":     " << g_bezel.size     << ",\n"
       << "  \"collapse\": " << g_bezel.collapse << ",\n"
@@ -548,7 +624,11 @@ void ui_lock_save() {
       << "  \"keys\":     " << g_bezel.keys     << ",\n"
       << "  \"chest\":    " << g_bezel.chest    << ",\n"
       << "  \"plus\":     " << g_bezel.plus     << ",\n"
-      << "  \"minus\":    " << g_bezel.minus    << "\n"
+      << "  \"minus\":    " << g_bezel.minus    << ",\n"
+      << "  \"compass_size\": " << g_compass_size_idx << ",\n"
+      << "  \"clickthrough\": " << (g_clickthrough.load() ? "true" : "false") << ",\n"
+      << "  \"dps_tracking_paused\": " << (g_dps_tracking_paused.load() ? "true" : "false") << ",\n"
+      << "  \"minimap_alpha\": " << g_minimap_alpha << "\n"
       << "}\n";
 }
 
@@ -565,9 +645,11 @@ void keybinds_save() {
          "Names: F1..F24, A..Z, 0..9, Home, End, Insert, Delete, PageUp, "
          "PageDown, Up, Down, Left, Right, Space, Enter, Tab, Esc, "
          "Backspace, Numpad0..Numpad9, OEM_1..OEM_8.\",\n"
-      << "  \"toggle_dps\":     \"" << key_to_name(g_keybinds.toggle_dps)     << "\",\n"
-      << "  \"toggle_minimap\": \"" << key_to_name(g_keybinds.toggle_minimap) << "\",\n"
-      << "  \"reset_dps\":      \"" << key_to_name(g_keybinds.reset_dps)      << "\"\n"
+      << "  \"toggle_dps\":         \"" << key_to_name(g_keybinds.toggle_dps)       << "\",\n"
+      << "  \"toggle_minimap\":     \"" << key_to_name(g_keybinds.toggle_minimap)   << "\",\n"
+      << "  \"reset_dps\":          \"" << key_to_name(g_keybinds.reset_dps)        << "\",\n"
+      << "  \"toggle_clickthru\":   \"" << key_to_name(g_keybinds.toggle_clickthru) << "\",\n"
+      << "  \"toggle_dps_track\":   \"" << key_to_name(g_keybinds.toggle_dps_track) << "\"\n"
       << "}\n";
 }
 
@@ -731,7 +813,6 @@ void bezel_draw_chest(ImDrawList* dl, const BezelButton& b, bool active) {
         {b.center.x - 1.0f, b.center.y - 1.5f},
         {b.center.x + 1.0f, b.center.y + 1.0f}, c);
 }
-
 void render_compass(const HeroSnapshot& h) {
     constexpr float kPi = 3.14159265358979323846f;
     const float size = compass_size_px();
@@ -762,20 +843,37 @@ void render_compass(const HeroSnapshot& h) {
     auto* dl = ImGui::GetWindowDrawList();
     ViewUV view = compute_view_uv(h.x, h.y, h.locked);
 
-    if (g_overlay.mosaic.resource) {
+    // Apply minimap alpha (issue #2). 1.0 = original behaviour, lower
+    // values fade the mosaic / bezel toward the game underneath. We
+    // tint the texture and scale the bezel alpha channel.
+    std::uint8_t alpha8 = (std::uint8_t)(g_minimap_alpha * 255.0f + 0.5f);
+    ImU32 tint_mosaic = IM_COL32(255, 255, 255, alpha8);
+    auto scale_alpha = [alpha8](ImU32 c) -> ImU32 {
+        std::uint32_t a = (c >> 24) & 0xff;
+        a = (a * alpha8) / 255;
+        return (c & 0x00ffffff) | (a << 24);
+    };
+    // Skeleton mode (issue #12): during the post-pause cool-down we
+    // skip the mosaic image entirely. Bezel + player arrow + buttons
+    // still draw so the user can see *something*, just no map content.
+    const bool skeleton = g_skeleton_minimap.load(std::memory_order_acquire);
+    if (!skeleton && g_overlay.mosaic.resource) {
         dl->AddImageRounded((ImTextureID)g_overlay.mosaic.srv_gpu.ptr,
                             p_min, p_max, view.uv0, view.uv1,
-                            IM_COL32_WHITE, r);
+                            tint_mosaic, r);
     } else {
-        dl->AddCircleFilled(center, r, IM_COL32(20, 22, 30, 255), 64);
+        dl->AddCircleFilled(center, r,
+                            scale_alpha(IM_COL32(20, 22, 30, 255)), 64);
     }
-    dl->AddCircle(center, r,        kColBezel,       96, 3.0f);
-    dl->AddCircle(center, r - 2.0f, kColBezelShadow, 96, 1.0f);
+    dl->AddCircle(center, r,        scale_alpha(kColBezel),       96, 3.0f);
+    dl->AddCircle(center, r - 2.0f, scale_alpha(kColBezelShadow), 96, 1.0f);
     dl->AddLine({center.x, p_min.y}, {center.x, p_min.y + 10.0f},
                 kColNorth, 2.5f);
 
-    // POIs (clipped to the bezel disc).
-    {
+    // POIs (clipped to the bezel disc). Skipped entirely in skeleton
+    // mode (issue #12) so the post-transition draw call count stays
+    // tiny while the game's DX12 driver settles.
+    if (!skeleton) {
         const auto& pois = pois_get();
         const float clip_r  = r - 4.0f;
         const float clip_r2 = clip_r * clip_r;
@@ -968,7 +1066,10 @@ void render_compass(const HeroSnapshot& h) {
 
     if (plus.clicked)  { g_calib.zoom += kZoomStep; if (g_calib.zoom > kZoomMax) g_calib.zoom = kZoomMax; }
     if (minus.clicked) { g_calib.zoom -= kZoomStep; if (g_calib.zoom < kZoomMin) g_calib.zoom = kZoomMin; }
-    if (sizeb.clicked)    g_compass_size_idx = (g_compass_size_idx + 1) % 3;
+    if (sizeb.clicked) {
+        g_compass_size_idx = (g_compass_size_idx + 1) % 3;
+        ui_lock_save();   // persist compass size (issue #6)
+    }
     if (filter.clicked)   g_filter_open      = !g_filter_open;
     if (lockb.clicked) {
         g_ui_locked.store(!g_ui_locked.load());
@@ -1009,6 +1110,20 @@ void render_minimap_window() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2, 2));
     ImGui::SetNextWindowPos(ImVec2(600, 20), ImGuiCond_FirstUseEver);
     ImGui::Begin("minimap", nullptr, wflags);
+    // Off-screen rescue (issue #1): if the saved window position is
+    // outside the current viewport, snap it back to a safe spot. Runs
+    // every frame but only acts when the check trips.
+    {
+        ImVec2 vp = ImGui::GetIO().DisplaySize;
+        ImVec2 wp = ImGui::GetWindowPos();
+        ImVec2 ws = ImGui::GetWindowSize();
+        if (window_is_offscreen(wp, ws, vp)) {
+            logf("overlay: minimap was off-screen at (%.0f,%.0f) "
+                 "vp=(%.0f,%.0f), snapping back",
+                 wp.x, wp.y, vp.x, vp.y);
+            ImGui::SetWindowPos(ImVec2(40, 40));
+        }
+    }
 
     if (g_compass_collapsed) {
         const float puck = 36.0f;
@@ -1080,6 +1195,21 @@ void render_minimap_window() {
         // misleading. Plain labels.
         ImGui::Checkbox("Plants", &g_filter.plants);
         ImGui::Checkbox("Ores",   &g_filter.ores);
+
+        // Opacity slider (issue #2). Affects mosaic + bezel ring;
+        // the player arrow, POI markers and bezel buttons stay full
+        // alpha so they don't fade away. Persists on release.
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::TextDisabled("Opacity");
+        ImGui::SetNextItemWidth(140);
+        if (ImGui::SliderFloat("##minimap_alpha", &g_minimap_alpha,
+                               0.30f, 1.00f, "%.2f")) {
+            // dragging -- live preview, save below
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            ui_lock_save();
+        }
         ImGui::EndChild();
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(5);
@@ -1136,12 +1266,26 @@ void render_fight_detail_window() {
                   f->id, lt.wHour, lt.wMinute, lt.wSecond);
 
     ImGui::SetNextWindowSize(ImVec2(560, 320), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(80, 80), ImGuiCond_FirstUseEver);
+    // Issue #5: default position used to be (80, 80) which overlapped
+    // the DPS meter -- users couldn't see this was a separate window
+    // they could drag. Bumped to (240, 240) so it's clearly its own
+    // window the first time it opens.
+    ImGui::SetNextWindowPos(ImVec2(240, 240), ImGuiCond_FirstUseEver);
 
     bool open = true;
     ImGuiWindowFlags fdetail_flags = ImGuiWindowFlags_NoScrollbar;
-    if (g_ui_locked.load()) fdetail_flags |= ImGuiWindowFlags_NoMove;
+    if (g_ui_locked.load())
+        fdetail_flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
     if (ImGui::Begin(title, &open, fdetail_flags)) {
+        // Off-screen rescue (issue #1) — runs inside the Begin block
+        // so we only touch ImGui state when the window actually exists.
+        ImVec2 vp = ImGui::GetIO().DisplaySize;
+        ImVec2 wp = ImGui::GetWindowPos();
+        ImVec2 ws = ImGui::GetWindowSize();
+        if (window_is_offscreen(wp, ws, vp)) {
+            logf("overlay: fight detail was off-screen, snapping back");
+            ImGui::SetWindowPos(ImVec2(240, 240));
+        }
         ImGui::TextColored(ImVec4(1.0f, 0.86f, 0.52f, 1.0f),
                            "duration %.1fs", f->duration_sec);
         ImGui::SameLine(0.0f, 24.0f);
@@ -1253,6 +1397,14 @@ void render_keys_window() {
                                   ImGuiWindowFlags_NoScrollbar;
     if (g_ui_locked.load()) keys_flags |= ImGuiWindowFlags_NoMove;
     if (ImGui::Begin("Hotkeys", &g_keys_open, keys_flags)) {
+        // Off-screen rescue (issue #1).
+        ImVec2 vp = ImGui::GetIO().DisplaySize;
+        ImVec2 wp = ImGui::GetWindowPos();
+        ImVec2 ws = ImGui::GetWindowSize();
+        if (window_is_offscreen(wp, ws, vp)) {
+            logf("overlay: hotkeys window was off-screen, snapping back");
+            ImGui::SetWindowPos(ImVec2(620, 540));
+        }
         auto row = [](const char* label, RebindSlot slot, UINT vk) {
             int active  = g_rebind_listening.load();
             bool listen = (active == (int)slot);
@@ -1273,9 +1425,26 @@ void render_keys_window() {
             if (listen) ImGui::PopStyleColor(2);
             ImGui::PopID();
         };
-        row("Toggle DPS",     RebindSlot::Dps,   g_keybinds.toggle_dps);
-        row("Toggle Minimap", RebindSlot::Map,   g_keybinds.toggle_minimap);
-        row("Reset DPS",      RebindSlot::Reset, g_keybinds.reset_dps);
+        row("Toggle DPS",       RebindSlot::Dps,       g_keybinds.toggle_dps);
+        row("Toggle Minimap",   RebindSlot::Map,       g_keybinds.toggle_minimap);
+        row("Reset DPS",        RebindSlot::Reset,     g_keybinds.reset_dps);
+        row("Click-through",    RebindSlot::ClickThru, g_keybinds.toggle_clickthru);
+        row("Pause DPS track",  RebindSlot::DpsTrack,  g_keybinds.toggle_dps_track);
+
+        // Live status (issue #4 / #7 + #13).
+        ImGui::Spacing();
+        bool ct = g_clickthrough.load();
+        ImGui::TextColored(
+            ct ? ImVec4(0.5f, 1.0f, 0.6f, 1.0f)
+               : ImVec4(0.8f, 0.75f, 0.6f, 1.0f),
+            ct ? "Click-through is ON (overlay does not eat mouse clicks)"
+               : "Click-through is OFF (mouse over overlay = overlay reacts)");
+        bool dpaused = g_dps_tracking_paused.load();
+        ImGui::TextColored(
+            dpaused ? ImVec4(1.0f, 0.7f, 0.5f, 1.0f)
+                    : ImVec4(0.8f, 0.75f, 0.6f, 1.0f),
+            dpaused ? "DPS tracking PAUSED (alloc hook + tick short-circuit)"
+                    : "DPS tracking ACTIVE (every damage event processed)");
 
         if (g_rebind_listening.load() != 0) {
             ImGui::Spacing();
@@ -1321,9 +1490,11 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             switch ((RebindSlot)listening) {
-                case RebindSlot::Dps:   g_keybinds.toggle_dps     = vk; break;
-                case RebindSlot::Map:   g_keybinds.toggle_minimap = vk; break;
-                case RebindSlot::Reset: g_keybinds.reset_dps      = vk; break;
+                case RebindSlot::Dps:       g_keybinds.toggle_dps       = vk; break;
+                case RebindSlot::Map:       g_keybinds.toggle_minimap   = vk; break;
+                case RebindSlot::Reset:     g_keybinds.reset_dps        = vk; break;
+                case RebindSlot::ClickThru: g_keybinds.toggle_clickthru = vk; break;
+                case RebindSlot::DpsTrack:  g_keybinds.toggle_dps_track = vk; break;
                 default: break;
             }
             g_rebind_listening.store(0);
@@ -1361,19 +1532,75 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             aggregator_reset();
             return 0;
         }
+        if (vk == g_keybinds.toggle_clickthru) {
+            bool now = !g_clickthrough.load();
+            g_clickthrough.store(now);
+            ui_lock_save();
+            logf("overlay: %s clickthrough -> %s",
+                 key_to_name(vk).c_str(),
+                 now ? "ON (mouse passes through)"
+                     : "OFF (mouse interacts with windows)");
+            return 0;
+        }
+        if (vk == g_keybinds.toggle_dps_track) {
+            bool now = !g_dps_tracking_paused.load();
+            g_dps_tracking_paused.store(now);
+            ui_lock_save();
+            logf("overlay: %s DPS tracking -> %s",
+                 key_to_name(vk).c_str(),
+                 now ? "PAUSED (alloc hook + damage tick short-circuit)"
+                     : "ACTIVE (tracking damage events again)");
+            return 0;
+        }
     }
 
     if (ImGui::GetCurrentContext() != nullptr) {
+        // Issues #4 / #7 / #14: click-through has two halves and the
+        // first version only did one of them.
+        //   - Eat mouse messages from the game when ImGui wants them
+        //     (= cursor over our window AND click-through OFF). Stops
+        //     the overlay from intercepting attacks / camera rotate.
+        //   - Stop ImGui from REACTING to those messages internally.
+        //     The old code always called ImGui's wndproc handler first
+        //     and then decided whether to forward to the game, but
+        //     ImGui's state-machine had already recorded the click, so
+        //     clicking the minimap zoom while click-through was on
+        //     still zoomed.
+        //
+        // 0.4.11: when click-through is on, mouse moves still go to
+        // ImGui so hover visuals work, but button / wheel events are
+        // hidden from ImGui entirely. The game's wndproc always
+        // receives them in this mode.
+        const bool ct = g_clickthrough.load();
+        bool is_mouse_button =
+            (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ||
+             msg == WM_LBUTTONDBLCLK ||
+             msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ||
+             msg == WM_RBUTTONDBLCLK ||
+             msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP ||
+             msg == WM_MBUTTONDBLCLK ||
+             msg == WM_MOUSEWHEEL  || msg == WM_MOUSEHWHEEL ||
+             msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP ||
+             msg == WM_XBUTTONDBLCLK);
+
+        if (ct && is_mouse_button) {
+            // Hide click / wheel events from ImGui entirely. Mouse
+            // moves still flow through so hover/POI scaling work.
+            return CallWindowProcW(g_overlay.orig_wndproc, hwnd, msg, wp, lp);
+        }
+
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
-        ImGuiIO& io = ImGui::GetIO();
-        if (io.WantCaptureMouse) {
-            switch (msg) {
-                case WM_MOUSEMOVE:
-                case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
-                case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
-                case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
-                case WM_MOUSEWHEEL:  case WM_MOUSEHWHEEL:
-                    return 0;
+        if (!ct) {
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.WantCaptureMouse) {
+                switch (msg) {
+                    case WM_MOUSEMOVE:
+                    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+                    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+                    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+                    case WM_MOUSEWHEEL:  case WM_MOUSEHWHEEL:
+                        return 0;
+                }
             }
         }
     }
@@ -1638,8 +1865,22 @@ void render_imgui_window() {
     // user shrink the window to just the title bar by clicking the
     // triangle next to "DPS Meter".
     ImGuiWindowFlags dps_flags = ImGuiWindowFlags_NoScrollbar;
-    if (g_ui_locked.load()) dps_flags |= ImGuiWindowFlags_NoMove;
+    // Independent DPS lock (issue #15): the minimap lock no longer
+    // pins the DPS window. The padlock inside the DPS window's status
+    // line toggles g_dps_locked instead.
+    if (g_dps_locked.load())
+        dps_flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
     ImGui::Begin("DPS Meter", nullptr, dps_flags);
+    // Off-screen rescue (issue #1).
+    {
+        ImVec2 vp = ImGui::GetIO().DisplaySize;
+        ImVec2 wp = ImGui::GetWindowPos();
+        ImVec2 ws = ImGui::GetWindowSize();
+        if (window_is_offscreen(wp, ws, vp)) {
+            logf("overlay: DPS meter was off-screen, snapping back");
+            ImGui::SetWindowPos(ImVec2(40, 40));
+        }
+    }
 
     // Pick a layout tier from current content width — drives column
     // visibility, header/footer verbosity, icon scale. Thresholds tuned
@@ -1654,23 +1895,22 @@ void render_imgui_window() {
     const float kIconPx = (tier <= 1) ? 20.0f : (tier == 2 ? 22.0f : 24.0f);
 
     // Lock toggle (tiny custom-drawn padlock) at the start of the
-    // status line. Same flag as the bezel lock button. We draw it
-    // ourselves with the ImDrawList because the default ImGui font
-    // doesn't ship the 🔒/🔓 unicode glyphs.
+    // status line. Toggles the DPS-window-only lock (issue #15) —
+    // the minimap has its own padlock on the bezel.
     {
-        bool locked = g_ui_locked.load();
+        bool locked = g_dps_locked.load();
         const float fh = ImGui::GetFontSize();
         ImVec2 p = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##lock_toggle", ImVec2(fh, fh));
+        ImGui::InvisibleButton("##dps_lock_toggle", ImVec2(fh, fh));
         bool hovered = ImGui::IsItemHovered();
         if (ImGui::IsItemClicked()) {
-            g_ui_locked.store(!locked);
+            g_dps_locked.store(!locked);
             ui_lock_save();
             locked = !locked;
         }
         if (hovered) {
-            ImGui::SetTooltip(locked ? "UI locked (click to unlock)"
-                                     : "UI unlocked (click to lock)");
+            ImGui::SetTooltip(locked ? "DPS window locked (click to unlock)"
+                                     : "DPS window unlocked (click to lock)");
         }
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImVec2 c(p.x + fh * 0.5f, p.y + fh * 0.5f);
@@ -1930,6 +2170,38 @@ void render_imgui_window() {
 void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     keybinds_maybe_reload();
 
+    // Crash-diagnosis heartbeat. Logs every 600 frames so a post-crash
+    // log shows the last frame the overlay submission completed for,
+    // and -- combined with the damage heartbeat -- lets us tell
+    // whether a freeze died inside our overlay submission or in the
+    // game's own Present that followed.
+    //
+    // 0.4.9: heartbeat now reports per-guard skip counts since the
+    // previous heartbeat. If a long-AFK alt-tab crash hits, the last
+    // heartbeat tells us whether our guards were doing their job
+    // (skip_fg should == 600 if alt-tabbed for the full window) or
+    // whether we slipped through and submitted into background-state.
+    static std::uint64_t s_overlay_ticks    = 0;
+    static int s_submitted   = 0;
+    static int s_skip_no_hero = 0;
+    static int s_skip_pause   = 0;
+    static int s_skip_iconic  = 0;
+    static int s_skip_hidden  = 0;
+    static int s_skip_fg      = 0;
+    static int s_skip_fence   = 0;
+    if (++s_overlay_ticks % 600 == 0) {
+        logf("overlay: alive @ tick %llu submitted=%d "
+             "skip(no_hero=%d pause=%d iconic=%d hidden=%d fg=%d "
+             "fence=%d) auto-disabled=%d",
+             (unsigned long long)s_overlay_ticks,
+             s_submitted,
+             s_skip_no_hero, s_skip_pause, s_skip_iconic, s_skip_hidden,
+             s_skip_fg, s_skip_fence,
+             (int)!g_overlay_enabled.load());
+        s_submitted = s_skip_no_hero = s_skip_pause = 0;
+        s_skip_iconic = s_skip_hidden = s_skip_fg = s_skip_fence = 0;
+    }
+
     // Loading-screen guard: when we have no Hero lock, the game is
     // very likely between zones (loading / streaming / hxbit resync)
     // and is sometimes mid-recreation of its DX12 resources. Doing a
@@ -1937,8 +2209,122 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     // can crash the host's Present (observed AVs in DX12Driver.present
     // on dungeon entry). Skip the entire overlay path until we're
     // back on a known-good Hero.
-    if (!hero_state_read().locked) {
+    HeroSnapshot h = hero_state_read();
+    if (!h.locked) {
+        ++s_skip_no_hero;
         return;
+    }
+
+    // Post-transition pause (issues #11 + #12). The DX12Driver.present
+    // AVs reported by several users happened at moments when the
+    // game's render pipeline was reconfiguring resources --- first
+    // hero spawn after the title screen (issue #12: crash ~5s after
+    // LOCKED) and cross-zone teleports (issue #11: crash ~31s after
+    // a Mayda->Azuram teleport). Two heuristics catch both:
+    //
+    //   1. Hero pointer changed from null (or to a fresh value),
+    //      meaning the player just locked into the world or
+    //      reconnected after a Hero replace.
+    //   2. Hero position jumped more than 500 game units between
+    //      frames, meaning a teleport just streamed in a new chunk.
+    //
+    // When either fires, we skip overlay submission for the next
+    // kPauseFrames frames (~5 s @ 60 fps) so the game's own DX12
+    // streaming finishes before we add another command list on top.
+    // 0.4.10 bumped from 120 (2 s) to 300 (5 s) after issue #12's
+    // v0.4.9 log showed our submission resumed cleanly 2 s post-LOCK,
+    // ran 1441 frames without any guard firing, and then crashed at
+    // the 5 s mark.
+    //
+    // 0.4.12 adds a follow-on "skeleton" phase: after the full pause
+    // expires we don't immediately resume the full minimap render
+    // (mosaic + 1000+ POI markers + player arrow). Instead we go
+    // through kSkeletonFrames where the minimap renders only the
+    // bezel ring + player arrow. That keeps the draw-call count tiny
+    // during the dangerous post-transition window where issue #12's
+    // user's setup was crashing ~9 s after we started submitting.
+    // Hypothesis: the volume of our ImGui geometry (mosaic AddImage
+    // + 1k AddImage/AddCircle for POIs) was the trigger on that
+    // hardware. If skeleton mode prevents the crash, we know the
+    // POI / mosaic render is the heavy step.
+    {
+        constexpr int   kPauseFrames    = 300;
+        constexpr int   kSkeletonFrames = 600;   // ~10 s @ 60 fps
+        constexpr double kTeleportDist2 = 500.0 * 500.0;
+        static std::uintptr_t s_prev_hero_ptr = 0;
+        static double s_prev_x = 0.0, s_prev_y = 0.0, s_prev_z = 0.0;
+        static int    s_pause_left    = 0;
+        static int    s_skeleton_left = 0;   // follow-on phase, see 0.4.12 note
+
+        std::uintptr_t cur_hero = hero_state_locked_ptr();
+        double dx = h.x - s_prev_x;
+        double dy = h.y - s_prev_y;
+        double dz = h.z - s_prev_z;
+        double dist2 = dx * dx + dy * dy + dz * dz;
+
+        if (cur_hero != s_prev_hero_ptr) {
+            // First lock or hero-pointer changed (zone transition,
+            // recovery from a re-validation failure, etc.).
+            s_pause_left    = kPauseFrames;
+            s_skeleton_left = kSkeletonFrames;
+            logf("overlay: hero pointer changed (0x%llx -> 0x%llx); "
+                 "pausing overlay submission for %d frames + skeleton "
+                 "minimap for %d frames after that",
+                 (unsigned long long)s_prev_hero_ptr,
+                 (unsigned long long)cur_hero,
+                 kPauseFrames, kSkeletonFrames);
+        } else if (s_prev_hero_ptr != 0 && dist2 > kTeleportDist2) {
+            // Same Hero, sudden large position jump = in-place
+            // teleport (some teleporters don't allocate a new Hero,
+            // they just update pos).
+            s_pause_left    = kPauseFrames;
+            s_skeleton_left = kSkeletonFrames;
+            logf("overlay: position jumped %.0fm from (%.0f,%.0f,%.0f) "
+                 "to (%.0f,%.0f,%.0f); pausing for %d + skeleton %d frames",
+                 std::sqrt(dist2),
+                 s_prev_x, s_prev_y, s_prev_z, h.x, h.y, h.z,
+                 kPauseFrames, kSkeletonFrames);
+        }
+
+        s_prev_hero_ptr = cur_hero;
+        s_prev_x = h.x; s_prev_y = h.y; s_prev_z = h.z;
+
+        if (s_pause_left > 0) {
+            --s_pause_left;
+            ++s_skip_pause;
+            return;
+        }
+        // Pause expired -- if we're still in the skeleton window,
+        // flip the file-scope flag the minimap reads to skip
+        // mosaic + POIs. Decremented every frame after the full
+        // pause is done.
+        if (s_skeleton_left > 0) {
+            --s_skeleton_left;
+            g_skeleton_minimap.store(true, std::memory_order_release);
+        } else {
+            g_skeleton_minimap.store(false, std::memory_order_release);
+        }
+    }
+
+    // Alt-tab / minimize guard (issues #9, #10). When the game window
+    // is iconic or not the foreground window, DXGI's Present can return
+    // DXGI_STATUS_OCCLUDED and our back buffer state isn't guaranteed
+    // valid. Submitting our overlay in that state is the most likely
+    // cause of the alt-tab access violations a few users reported.
+    // Cheap to check via the Win32 API; skips the whole render pass
+    // (including our ExecuteCommandLists) when the window isn't on
+    // screen.
+    if (g_overlay.hwnd) {
+        if (IsIconic(g_overlay.hwnd))         { ++s_skip_iconic; return; }
+        if (!IsWindowVisible(g_overlay.hwnd)) { ++s_skip_hidden; return; }
+        // The big one for issue #11: alt-tab to Discord / a browser
+        // doesn't minimize or hide the game window, it just loses
+        // foreground focus. Game's DXGI swap chain is in occluded /
+        // background state at that point and our overlay submission
+        // is implicated in the AV some users hit in that scenario.
+        // GetForegroundWindow is cheap and the right check.
+        HWND fg = GetForegroundWindow();
+        if (fg && fg != g_overlay.hwnd)       { ++s_skip_fg;     return; }
     }
 
     UINT idx = swap_chain->GetCurrentBackBufferIndex();
@@ -1955,6 +2341,7 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
             g_overlay_enabled.store(false);
             logf("overlay: %d slow frames -> auto-disabled", n);
         }
+        ++s_skip_fence;
         return;
     }
     g_consecutive_slow_frames = 0;
@@ -1997,12 +2384,36 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     g_overlay.next_fence_value++;
     queue->Signal(g_overlay.fence, g_overlay.next_fence_value);
     frame.fence_value = g_overlay.next_fence_value;
+    ++s_submitted;
 }
+
+// v0.4.13 kill switch (issues #12 / #16 bisection). Set once at
+// module init from FAREVER_NO_OVERLAY=1 by dllmain. When engaged
+// the overlay never initialises ImGui or submits any command list
+// to the game's queue, but damage/hero_state HL reads still run
+// in d3d12_hook's Present detour.
+std::atomic<bool> g_overlay_killed{false};
 
 }  // namespace
 
+void overlay_kill()    { g_overlay_killed.store(true); }
+bool overlay_killed()  { return g_overlay_killed.load(); }
+
 void overlay_on_present(IDXGISwapChain3* swap_chain,
                         ID3D12CommandQueue* queue) {
+    if (g_overlay_killed.load()) {
+        // Still emit a minimal heartbeat so #12/#16 retest logs
+        // confirm the Present hook is firing while the overlay is
+        // suppressed. Otherwise a silent log looks identical to "DLL
+        // didn't load".
+        static std::uint64_t s_killed_tick = 0;
+        if (++s_killed_tick % 600 == 0) {
+            logf("overlay: killed @ tick %llu (FAREVER_NO_OVERLAY=1, "
+                 "no submit, no ImGui)",
+                 static_cast<unsigned long long>(s_killed_tick));
+        }
+        return;
+    }
     if (g_overlay.init_failed) return;
     if (!queue) return;
     if (!g_overlay_enabled.load()) return;
@@ -2025,6 +2436,7 @@ void overlay_on_present(IDXGISwapChain3* swap_chain,
 
 void overlay_on_resize(IDXGISwapChain3* swap_chain, UINT buffer_count,
                        UINT /*width*/, UINT /*height*/) {
+    if (g_overlay_killed.load()) return;
     if (!g_overlay.initialized) return;
     if (swap_chain != g_overlay.owned_swap_chain) return;
     for (auto& f : g_overlay.frames) {
@@ -2041,6 +2453,7 @@ void overlay_on_resize(IDXGISwapChain3* swap_chain, UINT buffer_count,
 }
 
 void overlay_after_resize(IDXGISwapChain3* swap_chain) {
+    if (g_overlay_killed.load()) return;
     if (!g_overlay.initialized) return;
     if (swap_chain != g_overlay.owned_swap_chain) return;
     if (!create_back_buffer_targets(swap_chain)) {
@@ -2076,6 +2489,10 @@ void overlay_shutdown() {
     release_all();
     g_overlay.initialized = false;
     g_overlay.init_failed = false;
+}
+
+bool overlay_is_dps_tracking_paused() {
+    return g_dps_tracking_paused.load(std::memory_order_relaxed);
 }
 
 }  // namespace farever

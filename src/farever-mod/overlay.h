@@ -13,4 +13,18 @@ void overlay_on_resize(IDXGISwapChain3* swap_chain, UINT buffer_count,
 void overlay_after_resize(IDXGISwapChain3* swap_chain);
 void overlay_shutdown();
 
+// Issue #13: backend pause for the DPS pipeline. When true, the
+// DamageDisplay alloc-hook callback returns immediately and
+// damage_tick short-circuits. Hotkey-toggleable from overlay.cpp;
+// queried by damage.cpp on the hot path.
+bool overlay_is_dps_tracking_paused();
+
+// v0.4.13 kill switch (issues #12 / #16 bisection).
+// Set once at module init from FAREVER_NO_OVERLAY=1. Makes
+// overlay_on_present / overlay_on_resize / overlay_after_resize
+// no-ops -- no ImGui init, no D3D submission to the game queue.
+// Returns true iff the switch is engaged.
+void overlay_kill();
+bool overlay_killed();
+
 }  // namespace farever

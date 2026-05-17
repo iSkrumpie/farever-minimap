@@ -215,7 +215,19 @@ bool upload_rgba8(ID3D12Device* device,
     q->Signal(fence.p, 1);
     if (fence->GetCompletedValue() < 1) {
         fence->SetEventOnCompletion(1, event);
-        WaitForSingleObject(event, INFINITE);
+        // Bounded wait — see feedback_render_thread_no_infinite_wait.
+        // The texture is small (a single 96/256px atlas) and on the
+        // GPU's own queue, so 2 s is comfortably above worst-case GPU
+        // queue depth. If the GPU is genuinely stuck, we'd rather drop
+        // this load and surface a black icon than freeze Present.
+        DWORD wr = WaitForSingleObject(event, 2000);
+        if (wr != WAIT_OBJECT_0) {
+            logf("textures: fence wait timed out (wr=%lu) — dropping load",
+                 static_cast<unsigned long>(wr));
+            CloseHandle(event);
+            dst->Release();
+            return false;
+        }
     }
     CloseHandle(event);
 

@@ -39,7 +39,8 @@ constexpr std::size_t OFF_STR_LEN           = 16;
 
 struct Tracked {
     std::uintptr_t ptr;
-    const char*    kind;   // "chest", "red_orb", …  (static literal)
+    const char*    kind;          // "chest", "red_orb", ...  (static literal)
+    std::uintptr_t expected_type; // hl_type* captured at alloc time
     int            retries;
     char           last_state[64];  // for change detection
 };
@@ -84,12 +85,14 @@ bool read_haxe_ascii(std::uintptr_t str_ptr, char* out, std::size_t cap) {
     return true;
 }
 
-void push_tracked(std::uintptr_t obj, const char* kind) {
+void push_tracked(std::uintptr_t obj, const char* kind,
+                  const wchar_t* class_name) {
     if (!obj) return;
     std::lock_guard<std::mutex> lk(g_mu);
     Tracked t{};
-    t.ptr  = obj;
-    t.kind = kind;
+    t.ptr           = obj;
+    t.kind          = kind;
+    t.expected_type = hl_hook_get_type(class_name);
     g_tracked.push_back(t);
     if (g_tracked.size() > 4096) {
         g_tracked.erase(g_tracked.begin(),
@@ -97,10 +100,10 @@ void push_tracked(std::uintptr_t obj, const char* kind) {
     }
 }
 
-void on_chest_alloc      (std::uintptr_t o) { push_tracked(o, "chest"); }
-void on_redorb_alloc     (std::uintptr_t o) { push_tracked(o, "red_orb"); }
-void on_obelisk_alloc    (std::uintptr_t o) { push_tracked(o, "obelisk"); }
-void on_gatherable_alloc (std::uintptr_t o) { push_tracked(o, "gather"); }
+void on_chest_alloc      (std::uintptr_t o) { push_tracked(o, "chest",   L"ent.interactible.Chest"); }
+void on_redorb_alloc     (std::uintptr_t o) { push_tracked(o, "red_orb", L"ent.interactible.Gatherable"); }
+void on_obelisk_alloc    (std::uintptr_t o) { push_tracked(o, "obelisk", L"ent.interactible.Obelisk"); }
+void on_gatherable_alloc (std::uintptr_t o) { push_tracked(o, "gather",  L"ent.interactible.Gatherable"); }
 
 }  // namespace
 
@@ -115,7 +118,13 @@ void entity_state_start() {
 
 void entity_state_tick() {
     static std::uint64_t s_ticks = 0;
-    bool periodic_snapshot = (++s_ticks % 1800 == 0);   // ~30 s @ 60 Hz
+    ++s_ticks;
+    // Throttle the main walk to every 4th frame. Per-frame iteration
+    // over hundreds of tracked entities adds up to thousands of mem
+    // reads per second on the render thread; the actual state we
+    // surface (discovered set, used by the minimap) is sampled, not
+    // realtime, so quartering the rate is invisible to the user.
+    if ((s_ticks & 0x3) != 0) return;
 
     std::vector<Tracked> work;
     {
@@ -129,6 +138,28 @@ void entity_state_tick() {
 
     for (Tracked t : work) {
         if (!mem_is_userland(t.ptr)) continue;
+
+        // Type-anchor: drop the pointer if its hl_type at +0 doesn't
+        // match the class we registered it as. This is the canonical
+        // defense against the Boehm-GC slot-reuse pattern we saw in
+        // the dungeon crash — without it, a stale chest pointer that
+        // got reused for an h3d buffer reads garbage at offset 648
+        // ('stateId') and we eventually trip an AV walking the bad
+        // String pointer. See feedback_dyn_getp_render_thread_pressure.
+        if (!t.expected_type) {
+            // Type wasn't cached at alloc time — try to learn it now
+            // (the hl_hook dispatcher may have observed an alloc since).
+            // No good fallback so don't drop the entry yet.
+        } else {
+            std::uint64_t actual = 0;
+            if (!mem_read_u64(t.ptr, &actual)) continue;
+            if (static_cast<std::uintptr_t>(actual) != t.expected_type) {
+                // GC slot reuse — entity isn't what we thought it was.
+                // Drop it; a fresh alloc-hook event will give us the
+                // new (or same) entity on the next encounter.
+                continue;
+            }
+        }
 
         std::uint8_t removed = 0;
         if (!mem_read_u8(t.ptr + OFF_GO_REMOVED, &removed)) {
@@ -201,12 +232,12 @@ void entity_state_tick() {
             found.push_back({pos[0], pos[1], t.kind});
         }
 
-        if (periodic_snapshot) {
-            logf("entity_state: snap %s @0x%llx pos=(%.1f, %.1f) "
-                 "state='%s' (classified discovered=%d)",
-                 t.kind, (unsigned long long)t.ptr,
-                 pos[0], pos[1], state, (int)is_discovered);
-        }
+        // Periodic-snapshot diagnostic logging removed. It was bursting
+        // 100+ fprintf+fflush calls in a single render frame every
+        // ~30 s, which under load could collide with the game's own
+        // Present submission. The information was diagnostic only --
+        // production state is observable via the first-sight log
+        // above plus the transition log.
 
         retry.push_back(t);
     }

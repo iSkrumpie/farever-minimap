@@ -17,6 +17,7 @@
 #include "hl_hook.h"
 #include "mem_scan.h"
 #include "log.h"
+#include "overlay.h"   // overlay_is_dps_tracking_paused (issue #13)
 
 #include <windows.h>
 
@@ -201,9 +202,20 @@ bool try_decode(std::uintptr_t dd_ptr, DamageEvent* out) {
 
 void on_dd_alloc(std::uintptr_t dd_ptr) {
     if (!dd_ptr) return;
+    // Issue #13: when the user paused DPS tracking, bail out before
+    // the queue push so we don't accumulate work that damage_tick
+    // would just discard. The MinHook trampoline overhead still runs
+    // (few ns/alloc) but no further per-event work happens.
+    if (overlay_is_dps_tracking_paused()) return;
     g_allocs_seen.fetch_add(1, std::memory_order_relaxed);
+    // Hard cap so a heavy combat burst can't pile up an unbounded
+    // backlog. Old pending entries get dropped on overflow -- minor
+    // DPS-tracking accuracy loss vs. an unbounded queue and the
+    // associated GC / render-thread risk on long sessions.
+    constexpr std::size_t kMaxPending = 256;
     std::lock_guard<std::mutex> lk(g_pending_mu);
     g_pending.push_back({dd_ptr, 0});
+    while (g_pending.size() > kMaxPending) g_pending.pop_front();
 }
 
 }  // namespace
@@ -235,6 +247,10 @@ void damage_stop() {
 
 void damage_tick() {
     if (!g_active.load(std::memory_order_acquire)) return;
+    // Issue #13: if the user paused DPS tracking, short-circuit before
+    // the heartbeat / pending-walk so the render thread doesn't do any
+    // hl_dyn_getp work at all. Resumes cleanly when unpaused.
+    if (overlay_is_dps_tracking_paused()) return;
 
     std::uint64_t n = g_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n == 1) {
@@ -255,11 +271,24 @@ void damage_tick() {
              static_cast<unsigned long long>(g_dropped_garbage.load()));
     }
 
+    // Throttle: process at most kMaxPerTick events per frame. A heavy
+    // combat burst (observed ~65 DamageDisplay allocs in a single
+    // game-loop scheduler slot during a Mage_Conduit_Projectile
+    // channel) used to drag the render thread for ~10 ms straight,
+    // which correlated with the recurring DX12Driver.present AV.
+    // Spreading the work over multiple frames keeps the render-thread
+    // budget bounded; the DPS-meter readout is sampled, not realtime,
+    // so a one-frame delay per batch is invisible.
+    constexpr std::size_t kMaxPerTick = 4;
     std::vector<Pending> work;
     {
         std::lock_guard<std::mutex> lk(g_pending_mu);
-        work.assign(g_pending.begin(), g_pending.end());
-        g_pending.clear();
+        std::size_t take = g_pending.size();
+        if (take > kMaxPerTick) take = kMaxPerTick;
+        for (std::size_t i = 0; i < take; ++i) {
+            work.push_back(g_pending.front());
+            g_pending.pop_front();
+        }
     }
     if (work.empty()) return;
 

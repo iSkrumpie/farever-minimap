@@ -45,7 +45,9 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain3* self,
     // on freshly-allocated DRs) and the ImGui overlay submission.
     damage_tick();
     hero_state_tick();
-    entity_state_tick();
+    // entity_state_tick disabled in v0.4.4 alongside entity_state_start
+    // -- see the comment in dllmain.cpp.
+    // entity_state_tick();
     overlay_on_present(self, g_captured_queue.load());
     return g_orig_present(self, sync_interval, flags);
 }
