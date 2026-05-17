@@ -152,6 +152,32 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.7
+
+Round two of the user-reported issue sweep.
+
+* **Click-through toggle** (issues #4 and #7). New default hotkey
+  `F11`. When click-through is ON, the mouse passes straight through
+  the overlay to the game -- attacks and camera rotation aren't
+  intercepted any more, even when the cursor happens to land on the
+  DPS meter or the minimap. When it's OFF, the overlay reacts to
+  clicks normally (drag windows, click bezel buttons, rebind keys).
+  State is persisted to `ui_state.json` and shown in the Hotkeys
+  window. Rebindable in the same panel.
+* **Minimap opacity slider** (issue #2). Filter panel now has a
+  slider below the collectible toggles, range 30% to 100%. Affects
+  the mosaic and the bezel ring; player arrow, POI markers and
+  bezel buttons stay full-alpha so they don't fade away. Persisted
+  to `ui_state.json`.
+* **Foreground-window guard** (continuation of issues #9 / #10).
+  v0.4.6 caught `IsIconic` / `!IsWindowVisible`, but alt-tab to a
+  non-fullscreen window (Discord overlay, browser tab) doesn't
+  trigger either of those -- the game stays visible, just loses
+  focus. v0.4.7 also skips overlay submission when
+  `GetForegroundWindow() != game_hwnd`, which is the case for that
+  scenario. Should land the remaining alt-tab AV path reported in
+  issue #11.
+
 ## What's new in 0.4.6
 
 User-reported issue sweep:
