@@ -201,6 +201,9 @@ void hl_hook_uninstall() {
 // by the anticrash mode after the Hero lock is stable. After this
 // returns, hl_alloc_obj calls from the game bypass us entirely — zero
 // per-allocation overhead, but no more watcher dispatch. Idempotent.
+//
+// v0.4.15.1: keep g_target and g_orig populated after disable so the
+// self-heal path can re-enable without re-resolving them.
 void hl_hook_disable_alloc() {
     if (!g_installed.exchange(false)) return;
     if (g_target) {
@@ -210,8 +213,27 @@ void hl_hook_disable_alloc() {
     } else {
         logf("hl_hook: hl_alloc_obj disable skipped (no target cached)");
     }
-    g_orig   = nullptr;
-    g_target = nullptr;
+    // Intentionally NOT nulling g_target / g_orig — re-enable needs them.
+}
+
+// v0.4.15.1: re-arm the trampoline after a previous disable. The
+// MinHook patch is still in place (MH_DisableHook only stops trampoline
+// execution, doesn't unpatch). Just MH_EnableHook flips it back on.
+// Watchers from before are still registered. Returns true on success.
+bool hl_hook_re_enable_alloc() {
+    if (g_installed.load()) return true;
+    if (!g_target) {
+        logf("hl_hook: re-enable refused — no cached target");
+        return false;
+    }
+    MH_STATUS st = MH_EnableHook(g_target);
+    if (st != MH_OK) {
+        logf("hl_hook: re-enable failed, MH=%d", (int)st);
+        return false;
+    }
+    g_installed.store(true);
+    logf("hl_hook: hl_alloc_obj re-enabled (anticrash self-heal)");
+    return true;
 }
 
 }  // namespace farever

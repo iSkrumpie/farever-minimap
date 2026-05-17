@@ -20,6 +20,7 @@
 #include "entity_state.h"
 #include "d3d12_hook.h"
 #include "overlay.h"
+#include "overlay_window.h"
 
 #include <windows.h>
 #include <cstdio>
@@ -113,14 +114,26 @@ DWORD WINAPI worker_thread(LPVOID) {
     // and #16 retests on v0.4.14 showed still triggers the AV.
     const bool anticrash    = kill_switch("FAREVER_ANTICRASH",
                                           "anticrash.flag");
+    // v0.4.15.2 (rami local): final bisection switch. With this
+    // engaged, d3d12_hook_install is skipped entirely. DLL still
+    // loads as dinput8 proxy, hl_alloc_obj is still hooked, watchers
+    // still fire and push to pending — but nothing drains them and
+    // overlay never renders (no Present hook = no per-frame trigger).
+    // If the AV still hits with this on, it's hl_alloc_obj. If it
+    // doesn't hit, the trigger is our D3D12 vtable patch on Present /
+    // ResizeBuffers / ExecuteCommandLists.
+    const bool no_d3d12     = kill_switch("FAREVER_NO_D3D12",
+                                          "no_d3d12.flag");
     if (kill_overlay) fv::overlay_kill();
     if (anticrash)    fv::hero_state_set_anticrash(true);
     fv::overlay_set_kill_switch_state(kill_overlay, kill_hl_tick);
     fv::overlay_set_anticrash_state(anticrash);
-    fv::logf("worker: kill switches overlay=%s hl_tick=%s anticrash=%s",
+    fv::logf("worker: kill switches overlay=%s hl_tick=%s anticrash=%s "
+             "d3d12=%s",
              kill_overlay ? "OFF" : "ON",
              kill_hl_tick ? "OFF" : "ON",
-             anticrash    ? "ARMED" : "off");
+             anticrash    ? "ARMED" : "off",
+             no_d3d12     ? "OFF" : "ON");
 
     if (!fv::libhl_wait_and_resolve(&g_libhl)) {
         fv::logf("worker: libhl resolution failed — aborting mod startup");
@@ -147,12 +160,29 @@ DWORD WINAPI worker_thread(LPVOID) {
         fv::logf("worker: hl_hook_install failed");
         return 2;
     }
-    if (!fv::d3d12_hook_install()) {
+    if (no_d3d12) {
+        fv::logf("worker: D3D12 hook SKIPPED (no_d3d12.flag). "
+                 "Overlay will never render, ticks will never fire. "
+                 "Bisection mode only.");
+    } else if (!fv::d3d12_hook_install()) {
         fv::logf("worker: d3d12_hook_install failed — render-thread "
                  "ticks won't fire");
     }
-    fv::logf("worker: live — alloc-hook + d3d12 hook armed; "
-             "damage_tick + hero_state_tick drive from Present");
+
+    // v0.4.17 Option B: spin up the dedicated overlay window with its
+    // own swap chain. Replaces the old "render into game's swap chain
+    // via Present-hook" path. Game's swap chain only sees our Present
+    // hook as a pure tick driver now.
+    if (!kill_overlay) {
+        if (!fv::overlay_window_start()) {
+            fv::logf("worker: overlay_window_start failed");
+        }
+    }
+
+    fv::logf("worker: live — alloc-hook armed%s",
+             no_d3d12 ? "; D3D12 hook NOT installed"
+                      : "; Present-only tick driver hooked; overlay "
+                        "renders in own window");
     return 0;
 }
 

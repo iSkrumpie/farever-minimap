@@ -346,6 +346,12 @@ static void hero_state_tick_body(std::uint64_t n, std::uintptr_t locked) {
     // watcher events arrive. Poll Player.hero on the throttled-publish
     // cadence to detect zone-transition re-locks. is_local_hero still
     // re-validates correctness via the position-plausibility check.
+    // v0.4.15.1: self-heal addition — when polling loses the lock
+    // (zone transition that swapped BOTH Hero and Player, e.g. dungeon
+    // instance entry), re-arm the alloc-hook so the watcher catches
+    // the new Hero alloc. The next stable lock then disarms again.
+    // Self-healing loop: alloc-hook only armed during transitions,
+    // not during steady-state play.
     if (g_anticrash_disarmed.load(std::memory_order_acquire)) {
         if ((n & 0x3) == 0) {
             std::uintptr_t fresh = poll_hero_via_player();
@@ -357,11 +363,20 @@ static void hero_state_tick_body(std::uint64_t n, std::uintptr_t locked) {
                      (unsigned long long)locked);
                 locked = fresh;
             } else if (locked && !is_local_hero(locked)) {
-                logf("hero_state: polling LOST lock at tick %llu",
+                logf("hero_state: polling LOST lock at tick %llu — "
+                     "self-heal: re-arming alloc-hook",
                      (unsigned long long)n);
                 g_locked_hero.store(0);
                 g_locked_player.store(0);
+                g_unlocked_alloc_log_left.store(16);
+                if (hl_hook_re_enable_alloc()) {
+                    g_anticrash_disarmed.store(false,
+                                               std::memory_order_release);
+                    g_lock_stable_ticks.store(0,
+                                              std::memory_order_release);
+                }
                 locked = 0;
+                return;   // next tick will use the normal armed branch
             }
             publish();
         }

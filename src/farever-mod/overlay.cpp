@@ -56,6 +56,13 @@ struct Overlay {
 
     IDXGISwapChain3*            owned_swap_chain = nullptr;
     ID3D12Device*               device           = nullptr;
+    // v0.4.16: own DIRECT command queue. Replaces the game's
+    // captured queue (which required hooking ExecuteCommandLists, the
+    // highest-frequency D3D12 vtable hook and the most likely AV
+    // trigger per the no_d3d12 bisection). We create our own queue
+    // at init time and submit overlay command lists on it. The game's
+    // own swapchain Present implicitly synchronises with our writes.
+    ID3D12CommandQueue*         queue            = nullptr;
     ID3D12DescriptorHeap*       rtv_heap         = nullptr;
     ID3D12DescriptorHeap*       srv_heap         = nullptr;
     UINT                        rtv_descriptor_size = 0;
@@ -1627,6 +1634,7 @@ void release_all() {
         CloseHandle(g_overlay.fence_event);
         g_overlay.fence_event = nullptr;
     }
+    if (g_overlay.queue)  { g_overlay.queue->Release();  g_overlay.queue  = nullptr; }
     if (g_overlay.device) { g_overlay.device->Release(); g_overlay.device = nullptr; }
 }
 
@@ -1658,7 +1666,16 @@ bool create_back_buffer_targets(IDXGISwapChain3* swap_chain) {
     return true;
 }
 
-bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
+// v0.4.17 Option B: tells overlay_init to skip the wndproc subclass.
+// Set by overlay_window.cpp before the first overlay_on_present call.
+std::atomic<bool> g_overlay_standalone_window{false};
+
+// v0.4.17 Option B: HWND override for composition swap chains where
+// swap_chain->GetDesc().OutputWindow is NULL. Set by overlay_window.
+std::atomic<HWND> g_overlay_hwnd_override{nullptr};
+
+bool overlay_init(IDXGISwapChain3* swap_chain,
+                  ID3D12CommandQueue* caller_queue) {
     g_overlay.owned_swap_chain = swap_chain;
     if (FAILED(swap_chain->GetDevice(
             __uuidof(ID3D12Device),
@@ -1667,12 +1684,42 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
         return false;
     }
 
+    // v0.4.17 Option B: caller (overlay_window) can pass its own queue
+    // — required because the swap chain is bound to one queue at
+    // creation, and we need to submit on that same queue for Present
+    // ordering. If caller passes nullptr we create our own (legacy
+    // path from v0.4.16 game-swapchain mode, kept for safety).
+    if (caller_queue) {
+        g_overlay.queue = caller_queue;
+        g_overlay.queue->AddRef();
+        logf("overlay: using caller-provided queue %p",
+             static_cast<void*>(g_overlay.queue));
+    } else {
+        D3D12_COMMAND_QUEUE_DESC queue_desc{};
+        queue_desc.Type     = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+        queue_desc.Flags    = D3D12_COMMAND_QUEUE_FLAG_NONE;
+        if (FAILED(g_overlay.device->CreateCommandQueue(
+                &queue_desc, __uuidof(ID3D12CommandQueue),
+                reinterpret_cast<void**>(&g_overlay.queue)))) {
+            logf("overlay: CreateCommandQueue failed");
+            return false;
+        }
+        logf("overlay: own DIRECT queue created at %p",
+             static_cast<void*>(g_overlay.queue));
+    }
+
     DXGI_SWAP_CHAIN_DESC desc{};
     if (FAILED(swap_chain->GetDesc(&desc))) {
         logf("overlay: swap_chain->GetDesc failed");
         return false;
     }
-    g_overlay.hwnd              = desc.OutputWindow;
+    // v0.4.17 Option B: composition swap chains have no OutputWindow
+    // (it's NULL). Use the override HWND that overlay_window set
+    // from its own CreateWindowEx. ImGui-Win32 needs a real HWND to
+    // compute IO.DisplaySize each frame, otherwise the GUI is empty.
+    HWND override_hwnd = g_overlay_hwnd_override.load();
+    g_overlay.hwnd              = override_hwnd ? override_hwnd : desc.OutputWindow;
     g_overlay.back_buffer_count = desc.BufferCount;
     g_overlay.rt_format         = desc.BufferDesc.Format;
     if (g_overlay.back_buffer_count == 0 ||
@@ -1794,12 +1841,23 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
         logf("overlay: ImGui_ImplWin32_Init failed");
         return false;
     }
-    g_overlay.orig_wndproc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
-        g_overlay.hwnd, GWLP_WNDPROC,
-        reinterpret_cast<LONG_PTR>(overlay_wndproc)));
-    if (!g_overlay.orig_wndproc) {
-        logf("overlay: SetWindowLongPtrW(GWLP_WNDPROC) failed");
-        return false;
+    // v0.4.17 Option B: in standalone-window mode we deliberately do
+    // NOT install the wndproc subclass. The overlay window forwards
+    // every mouse event to the game window itself (see
+    // overlay_window.cpp's wndproc), so we must not let overlay's
+    // wndproc intercept them first — it would eat clicks before our
+    // base wndproc forwards them. ImGui input handling is also off,
+    // which means overlay UI is render-only for v0.4.17.
+    if (!g_overlay_standalone_window.load()) {
+        g_overlay.orig_wndproc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+            g_overlay.hwnd, GWLP_WNDPROC,
+            reinterpret_cast<LONG_PTR>(overlay_wndproc)));
+        if (!g_overlay.orig_wndproc) {
+            logf("overlay: SetWindowLongPtrW(GWLP_WNDPROC) failed");
+            return false;
+        }
+    } else {
+        logf("overlay: standalone-window mode, wndproc subclass skipped");
     }
 
     // Minimap assets — optional. Failure logs but doesn't abort init
@@ -1936,18 +1994,31 @@ void render_imgui_window() {
         ImGui::SameLine(0.0f, 6.0f);
     }
 
-    // Combat-state badge, leading the status line. Red dot while in
-    // combat, dim grey circle once we've idled past the timeout.
-    const ImVec4 col_active(1.0f, 0.30f, 0.30f, 1.0f);
-    const ImVec4 col_idle  (0.55f, 0.55f, 0.55f, 1.0f);
-    if (snap.in_combat) {
-        ImGui::TextColored(col_active, "\xe2\x97\x8f");  // ●
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("in combat");
-    } else {
-        ImGui::TextColored(col_idle, "\xe2\x97\x8b");    // ○
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("idle");
+    // Combat-state badge, leading the status line. Red filled circle
+    // while in combat, dim grey hollow circle once we've idled past
+    // the timeout. v0.5: drawn via ImDrawList because the unicode
+    // glyphs ● (U+25CF) / ○ (U+25CB) we used pre-v0.5 are not in
+    // the Karla font we ship, so they rendered as ? for users.
+    {
+        const float fh   = ImGui::GetFontSize();
+        ImVec2 p         = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##combat_badge", ImVec2(fh, fh));
+        bool hovered     = ImGui::IsItemHovered();
+        ImDrawList* dl   = ImGui::GetWindowDrawList();
+        ImVec2 c(p.x + fh * 0.5f, p.y + fh * 0.5f);
+        float r          = fh * 0.30f;
+        ImU32 col_active = IM_COL32(255, 80, 80, 255);
+        ImU32 col_idle   = IM_COL32(140, 140, 140, 240);
+        if (snap.in_combat) {
+            dl->AddCircleFilled(c, r, col_active, 16);
+        } else {
+            dl->AddCircle      (c, r, col_idle,   16, 1.5f);
+        }
+        if (hovered) {
+            ImGui::SetTooltip(snap.in_combat ? "in combat" : "idle");
+        }
+        ImGui::SameLine(0.0f, 8.0f);
     }
-    ImGui::SameLine(0.0f, 8.0f);
 
     if (snap.have_fight) {
         if (tier >= 2) {
@@ -2175,7 +2246,7 @@ extern std::atomic<bool> g_diag_no_overlay;
 extern std::atomic<bool> g_diag_no_hl_tick;
 extern std::atomic<bool> g_diag_anticrash;
 
-void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
+void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0_4_16*/) {
     keybinds_maybe_reload();
 
     // Crash-diagnosis heartbeat. Logs every 600 frames so a post-crash
@@ -2385,6 +2456,17 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     frame.command_list->ResourceBarrier(1, &barrier);
 
     frame.command_list->OMSetRenderTargets(1, &frame.rtv_handle, FALSE, nullptr);
+
+    // v0.4.17 Option B: clear back buffer to fully transparent.
+    // The DCOMP composition swap chain uses
+    // DXGI_ALPHA_MODE_PREMULTIPLIED, so RGB=0 + A=0 contributes
+    // nothing to the desktop composition — the game shows through
+    // wherever ImGui hasn't drawn anything.
+    constexpr float kClearTransparent[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    frame.command_list->ClearRenderTargetView(frame.rtv_handle,
+                                              kClearTransparent,
+                                              0, nullptr);
+
     ID3D12DescriptorHeap* heaps[] = {g_overlay.srv_heap};
     frame.command_list->SetDescriptorHeaps(1, heaps);
 
@@ -2396,10 +2478,13 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
 
     frame.command_list->Close();
     ID3D12CommandList* lists[] = {frame.command_list};
-    queue->ExecuteCommandLists(1, lists);
+    // v0.4.16: submit on our own DIRECT queue (was the game's captured
+    // queue in 0.4.15 and earlier). Decouples our render from the
+    // game's command-queue lifecycle entirely.
+    g_overlay.queue->ExecuteCommandLists(1, lists);
 
     g_overlay.next_fence_value++;
-    queue->Signal(g_overlay.fence, g_overlay.next_fence_value);
+    g_overlay.queue->Signal(g_overlay.fence, g_overlay.next_fence_value);
     frame.fence_value = g_overlay.next_fence_value;
     ++s_submitted;
 }
@@ -2443,7 +2528,7 @@ void render_diagnostic_box() {
     ImGui::PushStyleVar  (ImGuiStyleVar_WindowBorderSize, 1.5f);
     if (ImGui::Begin("##farever_diag", nullptr, flags)) {
         ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.40f, 1.0f),
-                           "farever-mod v0.4.15");
+                           "farever-mod v0.5");
         ImGui::Separator();
         if (g_diag_no_overlay.load()) {
             ImGui::Text("no_overlay.flag  ACTIVE");
@@ -2484,9 +2569,15 @@ void overlay_set_kill_switch_state(bool no_overlay, bool no_hl_tick) {
 void overlay_set_anticrash_state(bool anticrash) {
     g_diag_anticrash.store(anticrash);
 }
+void overlay_set_standalone_window(bool on) {
+    g_overlay_standalone_window.store(on);
+}
+void overlay_set_window_hwnd(void* hwnd) {
+    g_overlay_hwnd_override.store(reinterpret_cast<HWND>(hwnd));
+}
 
 void overlay_on_present(IDXGISwapChain3* swap_chain,
-                        ID3D12CommandQueue* queue) {
+                        ID3D12CommandQueue* caller_queue) {
     if (g_overlay_killed.load()) {
         // Still emit a minimal heartbeat so #12/#16 retest logs
         // confirm the Present hook is firing while the overlay is
@@ -2501,7 +2592,7 @@ void overlay_on_present(IDXGISwapChain3* swap_chain,
         return;
     }
     if (g_overlay.init_failed) return;
-    if (!queue) return;
+    // v0.4.16: no longer gated on captured-queue presence (we own ours).
     if (!g_overlay_enabled.load()) return;
 
     bool expected = false;
@@ -2509,7 +2600,7 @@ void overlay_on_present(IDXGISwapChain3* swap_chain,
     struct Scope { ~Scope() { g_in_render.store(false); } } scope;
 
     if (!g_overlay.initialized) {
-        if (!overlay_init(swap_chain, queue)) {
+        if (!overlay_init(swap_chain, caller_queue)) {
             g_overlay.init_failed = true;
             release_all();
             return;
@@ -2517,7 +2608,7 @@ void overlay_on_present(IDXGISwapChain3* swap_chain,
         g_overlay.initialized = true;
     }
     if (swap_chain != g_overlay.owned_swap_chain) return;
-    overlay_render(swap_chain, queue);
+    overlay_render(swap_chain, nullptr);
 }
 
 void overlay_on_resize(IDXGISwapChain3* swap_chain, UINT buffer_count,

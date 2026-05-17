@@ -202,6 +202,12 @@ bool try_decode(std::uintptr_t dd_ptr, DamageEvent* out) {
 
 void on_dd_alloc(std::uintptr_t dd_ptr) {
     if (!dd_ptr) return;
+    // v0.4.15.1: if the module is stopped (anticrash disarm called
+    // damage_stop), skip the queue push entirely. Matters during
+    // anticrash self-heal: the alloc-hook is re-armed for the new
+    // Hero allocation, but damage stays off — without this guard
+    // pending would accumulate DamageDisplay events nobody drains.
+    if (!g_active.load(std::memory_order_acquire)) return;
     // Issue #13: when the user paused DPS tracking, bail out before
     // the queue push so we don't accumulate work that damage_tick
     // would just discard. The MinHook trampoline overhead still runs

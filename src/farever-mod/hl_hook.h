@@ -29,6 +29,15 @@ void hl_hook_uninstall();
 // from the game bypass us entirely.
 void hl_hook_disable_alloc();
 
+// v0.4.15.1: re-enable the hl_alloc_obj hook after a previous
+// disable_alloc. Used by the anticrash self-heal path: when polling
+// loses the lock (zone transition replaced both Hero AND Player),
+// we re-arm the alloc-hook so the watcher catches the new Hero
+// allocation, then disarm again 5 s after the next stable lock.
+// The MinHook patch and watcher registrations are still in place
+// from hl_hook_install; this just re-arms the trampoline.
+bool hl_hook_re_enable_alloc();
+
 // Register a watcher for a Haxe class. The dispatcher reads the class
 // name from `hl_type.obj.name` on first allocation per type, matches
 // it against registered names, and caches the hl_type* → watcher map

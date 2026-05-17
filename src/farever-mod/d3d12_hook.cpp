@@ -11,7 +11,6 @@
 #include "damage.h"
 #include "hero_state.h"
 #include "entity_state.h"
-#include "overlay.h"
 
 #include <windows.h>
 #include <atomic>
@@ -24,56 +23,25 @@ namespace {
 
 using PresentFn = HRESULT(STDMETHODCALLTYPE*)(
     IDXGISwapChain3* self, UINT sync_interval, UINT flags);
-using ResizeBuffersFn = HRESULT(STDMETHODCALLTYPE*)(
-    IDXGISwapChain3* self, UINT buffer_count, UINT width, UINT height,
-    DXGI_FORMAT new_format, UINT swap_chain_flags);
-using ExecuteCommandListsFn = void(STDMETHODCALLTYPE*)(
-    ID3D12CommandQueue* self, UINT num_command_lists,
-    ID3D12CommandList* const* command_lists);
 
-PresentFn               g_orig_present              = nullptr;
-ResizeBuffersFn         g_orig_resize_buffers       = nullptr;
-ExecuteCommandListsFn   g_orig_execute_command_lists = nullptr;
-
-std::atomic<ID3D12CommandQueue*> g_captured_queue{nullptr};
+PresentFn         g_orig_present = nullptr;
 std::atomic<bool> g_installed{false};
 
+// v0.4.17 Option B: Present hook is reduced to a pure HashLink tick
+// driver. The overlay renders into its own window (overlay_window.cpp)
+// on its own thread with its own swapchain — completely independent of
+// the game's render path. This Present hook only exists because the
+// HashLink heap must be read from a thread the game's GC is aware of
+// (see feedback_hashlink_pump_thread.md), and the game's render thread
+// (which calls Present) is the only such thread we can reach.
+//
+// ResizeBuffers hook was removed entirely (was just for overlay's RTV
+// re-creation, no longer needed since overlay owns its swapchain).
 HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain3* self,
                                        UINT sync_interval, UINT flags) {
-    // Present runs on the game's render thread (HashLink-registered),
-    // so this is the safe place for both the damage pump (heap reads
-    // on freshly-allocated DRs) and the ImGui overlay submission.
     damage_tick();
     hero_state_tick();
-    // entity_state_tick disabled in v0.4.4 alongside entity_state_start
-    // -- see the comment in dllmain.cpp.
-    // entity_state_tick();
-    overlay_on_present(self, g_captured_queue.load());
     return g_orig_present(self, sync_interval, flags);
-}
-
-HRESULT STDMETHODCALLTYPE hook_resize_buffers(
-    IDXGISwapChain3* self, UINT buffer_count, UINT width, UINT height,
-    DXGI_FORMAT new_format, UINT swap_chain_flags) {
-    overlay_on_resize(self, buffer_count, width, height);
-    HRESULT hr = g_orig_resize_buffers(self, buffer_count, width, height,
-                                       new_format, swap_chain_flags);
-    overlay_after_resize(self);
-    return hr;
-}
-
-void STDMETHODCALLTYPE hook_execute_command_lists(
-    ID3D12CommandQueue* self, UINT num_command_lists,
-    ID3D12CommandList* const* command_lists) {
-    if (g_captured_queue.load() == nullptr) {
-        D3D12_COMMAND_QUEUE_DESC desc = self->GetDesc();
-        if (desc.Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-            g_captured_queue.store(self);
-            logf("d3d12: captured DIRECT queue %p",
-                 static_cast<void*>(self));
-        }
-    }
-    g_orig_execute_command_lists(self, num_command_lists, command_lists);
 }
 
 template <typename T>
@@ -85,8 +53,7 @@ struct ComPtr {
     operator T*() const { return p; }
 };
 
-bool discover_vtable_pointers(void** out_present, void** out_resize_buffers,
-                              void** out_execute_command_lists) {
+bool discover_vtable_pointers(void** out_present) {
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(wc);
     wc.lpfnWndProc   = DefWindowProcW;
@@ -134,11 +101,10 @@ bool discover_vtable_pointers(void** out_present, void** out_resize_buffers,
                 queue.p, hwnd, &scd, nullptr, nullptr, &swap_chain))) break;
 
         void** swap_chain_vt = *reinterpret_cast<void***>(swap_chain.p);
-        void** queue_vt      = *reinterpret_cast<void***>(queue.p);
-
-        *out_present              = swap_chain_vt[8];
-        *out_resize_buffers       = swap_chain_vt[13];
-        *out_execute_command_lists = queue_vt[10];
+        *out_present = swap_chain_vt[8];
+        // v0.4.17: only need Present vtable; ResizeBuffers + ECL were
+        // dropped because the no_d3d12 bisection proved D3D12 vtable
+        // patches are AV-triggering, so we minimise to one hook.
         ok = true;
     } while (false);
 
@@ -152,15 +118,14 @@ bool discover_vtable_pointers(void** out_present, void** out_resize_buffers,
 bool d3d12_hook_install() {
     if (g_installed.exchange(true)) return true;
 
-    void* present_ptr        = nullptr;
-    void* resize_buffers_ptr = nullptr;
-    void* exec_ptr           = nullptr;
-    if (!discover_vtable_pointers(&present_ptr, &resize_buffers_ptr, &exec_ptr)) {
+    void* present_ptr = nullptr;
+    if (!discover_vtable_pointers(&present_ptr)) {
         g_installed.store(false);
         return false;
     }
-    logf("d3d12: vtable Present=%p ResizeBuffers=%p ExecuteCommandLists=%p",
-         present_ptr, resize_buffers_ptr, exec_ptr);
+    logf("d3d12: vtable Present=%p "
+         "(v0.4.17 Option B: Present-only tick driver, no overlay submit)",
+         present_ptr);
 
     // MinHook was likely already initialised by hl_hook. That's fine —
     // MH_Initialize returns MH_ERROR_ALREADY_INITIALIZED which we
@@ -182,23 +147,13 @@ bool d3d12_hook_install() {
         return true;
     };
 
-    bool ok = true;
-    ok &= install_one(present_ptr, reinterpret_cast<void*>(&hook_present),
-                      reinterpret_cast<void**>(&g_orig_present), "Present");
-    ok &= install_one(resize_buffers_ptr,
-                      reinterpret_cast<void*>(&hook_resize_buffers),
-                      reinterpret_cast<void**>(&g_orig_resize_buffers),
-                      "ResizeBuffers");
-    ok &= install_one(exec_ptr,
-                      reinterpret_cast<void*>(&hook_execute_command_lists),
-                      reinterpret_cast<void**>(&g_orig_execute_command_lists),
-                      "ExecuteCommandLists");
-
+    bool ok = install_one(present_ptr, reinterpret_cast<void*>(&hook_present),
+                          reinterpret_cast<void**>(&g_orig_present), "Present");
     if (!ok) {
         d3d12_hook_uninstall();
         return false;
     }
-    log_line("d3d12: hooks installed");
+    log_line("d3d12: Present hook installed (tick driver only)");
     return true;
 }
 
@@ -206,15 +161,8 @@ void d3d12_hook_uninstall() {
     if (!g_installed.exchange(false)) return;
     MH_DisableHook(MH_ALL_HOOKS);
     // Don't MH_Uninitialize — hl_hook still uses MinHook.
-    g_orig_present              = nullptr;
-    g_orig_resize_buffers       = nullptr;
-    g_orig_execute_command_lists = nullptr;
-    g_captured_queue.store(nullptr);
+    g_orig_present = nullptr;
     log_line("d3d12: hooks uninstalled");
-}
-
-ID3D12CommandQueue* d3d12_captured_queue() {
-    return g_captured_queue.load();
 }
 
 }  // namespace farever
