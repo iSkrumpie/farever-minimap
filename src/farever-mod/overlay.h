@@ -34,4 +34,9 @@ bool overlay_killed();
 // abandoned because the user thought the mod failed to load).
 void overlay_set_kill_switch_state(bool no_overlay, bool no_hl_tick);
 
+// v0.4.15 anticrash diagnostic. Same diag box gets a third line so
+// the user can see whether anticrash mode is armed (waiting for
+// lock-stable countdown) or disarmed (hook removed, DPS dead).
+void overlay_set_anticrash_state(bool anticrash);
+
 }  // namespace farever

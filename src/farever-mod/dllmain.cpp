@@ -106,11 +106,21 @@ DWORD WINAPI worker_thread(LPVOID) {
                                           "no_overlay.flag");
     const bool kill_hl_tick = kill_switch("FAREVER_NO_HL_TICK",
                                           "no_hl_tick.flag");
+    // v0.4.15: anticrash mode. When set, hero_state arms a 5 s
+    // post-lock countdown after which the hl_alloc_obj trampoline is
+    // surgically removed and damage tracking stopped. Trade-off: no
+    // DPS, but eliminates the per-allocation overhead that issue #11
+    // and #16 retests on v0.4.14 showed still triggers the AV.
+    const bool anticrash    = kill_switch("FAREVER_ANTICRASH",
+                                          "anticrash.flag");
     if (kill_overlay) fv::overlay_kill();
+    if (anticrash)    fv::hero_state_set_anticrash(true);
     fv::overlay_set_kill_switch_state(kill_overlay, kill_hl_tick);
-    fv::logf("worker: kill switches overlay=%s hl_tick=%s",
+    fv::overlay_set_anticrash_state(anticrash);
+    fv::logf("worker: kill switches overlay=%s hl_tick=%s anticrash=%s",
              kill_overlay ? "OFF" : "ON",
-             kill_hl_tick ? "OFF" : "ON");
+             kill_hl_tick ? "OFF" : "ON",
+             anticrash    ? "ARMED" : "off");
 
     if (!fv::libhl_wait_and_resolve(&g_libhl)) {
         fv::logf("worker: libhl resolution failed — aborting mod startup");

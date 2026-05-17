@@ -36,7 +36,11 @@ constexpr std::size_t OFF_OBJ_NAME  = 16;
 constexpr std::uint32_t HOBJ        = 11;
 
 using PFN_hl_alloc_obj = std::uintptr_t (*)(std::uintptr_t /*hl_type* t*/);
-PFN_hl_alloc_obj g_orig = nullptr;
+PFN_hl_alloc_obj g_orig   = nullptr;
+// v0.4.15: stash the target address of hl_alloc_obj so we can later
+// MH_DisableHook just that one (not MH_ALL_HOOKS, which would also
+// kill the D3D12 hooks installed by d3d12_hook.cpp).
+void*            g_target = nullptr;
 
 struct Watcher {
     std::wstring   class_name;
@@ -178,6 +182,7 @@ bool hl_hook_install(const LibHL& libhl) {
         g_installed.store(false);
         return false;
     }
+    g_target = libhl.hl_alloc_obj;
     logf("hl_hook: hl_alloc_obj hooked, %zu watcher(s) registered",
          g_watchers.size());
     return true;
@@ -189,6 +194,24 @@ void hl_hook_uninstall() {
     // Don't MH_Uninitialize — other mods may still be using MinHook.
     g_orig = nullptr;
     logf("hl_hook: hl_alloc_obj unhooked");
+}
+
+// v0.4.15 surgical disable: targets only the hl_alloc_obj trampoline
+// so the D3D12 hooks installed by d3d12_hook.cpp keep working. Used
+// by the anticrash mode after the Hero lock is stable. After this
+// returns, hl_alloc_obj calls from the game bypass us entirely — zero
+// per-allocation overhead, but no more watcher dispatch. Idempotent.
+void hl_hook_disable_alloc() {
+    if (!g_installed.exchange(false)) return;
+    if (g_target) {
+        MH_STATUS st = MH_DisableHook(g_target);
+        logf("hl_hook: hl_alloc_obj disabled (anticrash mode), MH=%d",
+             (int)st);
+    } else {
+        logf("hl_hook: hl_alloc_obj disable skipped (no target cached)");
+    }
+    g_orig   = nullptr;
+    g_target = nullptr;
 }
 
 }  // namespace farever

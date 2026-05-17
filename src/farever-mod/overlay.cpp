@@ -2173,6 +2173,7 @@ void render_imgui_window() {
 void render_diagnostic_box();
 extern std::atomic<bool> g_diag_no_overlay;
 extern std::atomic<bool> g_diag_no_hl_tick;
+extern std::atomic<bool> g_diag_anticrash;
 
 void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     keybinds_maybe_reload();
@@ -2222,7 +2223,9 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     // can visually confirm the mod is alive. Skip the no_hero early-
     // exit in that case and fall through; the actual minimap + DPS
     // windows still gate on h.locked internally so they stay hidden.
-    const bool diag_force = g_diag_no_hl_tick.load() || g_diag_no_overlay.load();
+    const bool diag_force = g_diag_no_hl_tick.load() ||
+                            g_diag_no_overlay.load() ||
+                            g_diag_anticrash.load();
     if (!h.locked && !diag_force) {
         ++s_skip_no_hero;
         return;
@@ -2413,6 +2416,8 @@ std::atomic<bool> g_overlay_killed{false};
 // dllmain via overlay_set_kill_switch_state().
 std::atomic<bool> g_diag_no_overlay{false};
 std::atomic<bool> g_diag_no_hl_tick{false};
+// v0.4.15: cached anticrash state for the same diag box.
+std::atomic<bool> g_diag_anticrash{false};
 
 // Diagnostic-mode status box. Bypasses the hero-lock gate so it
 // appears even when no_hl_tick.flag is set (hero never locks ->
@@ -2420,7 +2425,9 @@ std::atomic<bool> g_diag_no_hl_tick{false};
 // dead). Tiny window pinned top-left. Only rendered when at least
 // one kill switch is active.
 void render_diagnostic_box() {
-    if (!g_diag_no_hl_tick.load() && !g_diag_no_overlay.load()) return;
+    if (!g_diag_no_hl_tick.load() &&
+        !g_diag_no_overlay.load() &&
+        !g_diag_anticrash.load()) return;
     ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.78f);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove |
@@ -2436,7 +2443,7 @@ void render_diagnostic_box() {
     ImGui::PushStyleVar  (ImGuiStyleVar_WindowBorderSize, 1.5f);
     if (ImGui::Begin("##farever_diag", nullptr, flags)) {
         ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.40f, 1.0f),
-                           "farever-mod v0.4.14");
+                           "farever-mod v0.4.15");
         ImGui::Separator();
         if (g_diag_no_overlay.load()) {
             ImGui::Text("no_overlay.flag  ACTIVE");
@@ -2444,6 +2451,19 @@ void render_diagnostic_box() {
         if (g_diag_no_hl_tick.load()) {
             ImGui::Text("no_hl_tick.flag  ACTIVE");
             ImGui::TextDisabled("minimap + DPS suppressed by design");
+        }
+        if (g_diag_anticrash.load()) {
+            if (hero_state_anticrash_disarmed()) {
+                ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.55f, 1.0f),
+                                   "anticrash.flag  DISARMED");
+                ImGui::TextDisabled("alloc-hook removed, DPS off");
+                ImGui::TextDisabled("minimap polls Player.hero");
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.30f, 1.0f),
+                                   "anticrash.flag  ARMED");
+                ImGui::TextDisabled("waiting 5 s lock stable, then");
+                ImGui::TextDisabled("alloc-hook will be removed");
+            }
         }
         ImGui::TextDisabled("diagnostic mode -- delete the flag");
         ImGui::TextDisabled("from data/ + restart for normal use");
@@ -2460,6 +2480,9 @@ bool overlay_killed()  { return g_overlay_killed.load(); }
 void overlay_set_kill_switch_state(bool no_overlay, bool no_hl_tick) {
     g_diag_no_overlay.store(no_overlay);
     g_diag_no_hl_tick.store(no_hl_tick);
+}
+void overlay_set_anticrash_state(bool anticrash) {
+    g_diag_anticrash.store(anticrash);
 }
 
 void overlay_on_present(IDXGISwapChain3* swap_chain,

@@ -14,6 +14,7 @@
 
 #include "hero_state.h"
 #include "hl_hook.h"
+#include "damage.h"
 #include "mem_scan.h"
 #include "log.h"
 #include "progress_state.h"
@@ -303,7 +304,75 @@ void hero_state_stop() {
 constexpr int               kMaxConsecutiveFailures = 5;
 static std::atomic<int>     g_consecutive_failures{0};
 
+// v0.4.15 anticrash mode. Issues #11 and #16 retest on v0.4.14 showed
+// the throttled HL-read path still triggers the AV. Even at 1 damage
+// alloc / minute (kesmese alt-tabbed) the trampoline overhead through
+// hl_alloc_obj on every game allocation accumulates. The only fix is
+// to remove the trampoline entirely once the lock is stable.
+//
+// When armed (data/anticrash.flag at boot, dllmain calls
+// hero_state_set_anticrash(true)):
+//   1. Watcher-driven lock acquisition runs normally until first lock.
+//   2. We count consecutive ticks where the lock holds.
+//   3. After kAnticrashStableTicks (5 s at 60 Hz), we call
+//      hl_hook_disable_alloc() to surgically remove the alloc-hook
+//      trampoline and damage_stop() to drop the damage pipeline.
+//   4. From then on, hero_state_tick polls Player.hero each
+//      throttled-publish frame to detect zone transitions; no more
+//      alloc-hook events ever arrive.
+//
+// Trade-off: DPS tracking stops. Users opt in via the flag file.
+constexpr std::uint64_t           kAnticrashStableTicks = 300;
+static std::atomic<bool>          g_anticrash_on{false};
+static std::atomic<bool>          g_anticrash_disarmed{false};
+static std::atomic<std::uint64_t> g_lock_stable_ticks{0};
+
+// Read Hero pointer via the back-reference from the cached Player.
+// Player itself survives zone transitions; only Hero gets swapped.
+// Used after anticrash disarm to detect zone-transition re-locks
+// without needing the alloc-hook watcher.
+std::uintptr_t poll_hero_via_player() {
+    std::uintptr_t player = g_locked_player.load(std::memory_order_acquire);
+    if (!player || !mem_is_userland(player)) return 0;
+    std::uint64_t hero_u64 = 0;
+    if (!mem_read_u64(player + OFF_PLAYER_HERO, &hero_u64)) return 0;
+    auto hero = static_cast<std::uintptr_t>(hero_u64);
+    if (!hero || !mem_is_userland(hero)) return 0;
+    return hero;
+}
+
 static void hero_state_tick_body(std::uint64_t n, std::uintptr_t locked) {
+    // v0.4.15 anticrash post-disarm path: alloc-hook is gone, no more
+    // watcher events arrive. Poll Player.hero on the throttled-publish
+    // cadence to detect zone-transition re-locks. is_local_hero still
+    // re-validates correctness via the position-plausibility check.
+    if (g_anticrash_disarmed.load(std::memory_order_acquire)) {
+        if ((n & 0x3) == 0) {
+            std::uintptr_t fresh = poll_hero_via_player();
+            if (fresh && fresh != locked && is_local_hero(fresh)) {
+                g_locked_hero.store(fresh, std::memory_order_release);
+                logf("hero_state: polling RE-LOCKED via Player.hero "
+                     "@ 0x%llx (tick %llu, prev=0x%llx)",
+                     (unsigned long long)fresh, (unsigned long long)n,
+                     (unsigned long long)locked);
+                locked = fresh;
+            } else if (locked && !is_local_hero(locked)) {
+                logf("hero_state: polling LOST lock at tick %llu",
+                     (unsigned long long)n);
+                g_locked_hero.store(0);
+                g_locked_player.store(0);
+                locked = 0;
+            }
+            publish();
+        }
+        if (locked && (n % 600 == 0)) {
+            logf("hero_state[anticrash]: pos=(%.1f, %.1f, %.1f) tick %llu",
+                 g_snapshot.x, g_snapshot.y, g_snapshot.z,
+                 (unsigned long long)n);
+        }
+        return;
+    }
+
     // v0.4.14 (D): cap drain per tick so a burst of allocs (city scene
     // with many players entering range, dungeon-exit burst of ~16
     // template Heroes) can't run dozens of is_local_hero checks in
@@ -395,6 +464,33 @@ static void hero_state_tick_body(std::uint64_t n, std::uintptr_t locked) {
         publish();
     }
 
+    // v0.4.15 anticrash arm/disarm. If the flag was set at boot and we
+    // currently hold a lock, count consecutive stable ticks. After 5 s
+    // (300 ticks) of uninterrupted lock, surgically remove the
+    // hl_alloc_obj trampoline and stop damage tracking. From the next
+    // tick onward the body's anticrash-post-disarm short-circuit at the
+    // top kicks in and we poll Player.hero instead of watcher events.
+    if (g_anticrash_on.load(std::memory_order_acquire) &&
+        !g_anticrash_disarmed.load(std::memory_order_acquire)) {
+        if (locked) {
+            std::uint64_t stable = g_lock_stable_ticks.fetch_add(
+                                       1, std::memory_order_relaxed) + 1;
+            if (stable >= kAnticrashStableTicks) {
+                logf("hero_state: anticrash trigger at tick %llu — "
+                     "removing hl_alloc_obj hook and damage pipeline",
+                     (unsigned long long)n);
+                damage_stop();
+                hl_hook_disable_alloc();
+                g_anticrash_disarmed.store(true,
+                                           std::memory_order_release);
+            }
+        } else {
+            // Lost the lock before we got to disarm. Reset counter so
+            // we wait another 5 s after the next stable lock.
+            g_lock_stable_ticks.store(0, std::memory_order_relaxed);
+        }
+    }
+
     // Heartbeat: log current position every ~10 s so we can sanity-
     // check that the locked Hero is actually moving with the player.
     if (locked && (n % 600 == 0)) {
@@ -438,5 +534,13 @@ HeroSnapshot hero_state_read() { return g_snapshot; }
 std::uintptr_t hero_state_locked_ptr() {
     return g_locked_hero.load(std::memory_order_acquire);
 }
+
+void hero_state_set_anticrash(bool on) {
+    g_anticrash_on.store(on);
+    if (!on) g_lock_stable_ticks.store(0);
+}
+
+bool hero_state_anticrash_armed()    { return g_anticrash_on.load(); }
+bool hero_state_anticrash_disarmed() { return g_anticrash_disarmed.load(); }
 
 }  // namespace farever

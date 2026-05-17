@@ -35,4 +35,16 @@ HeroSnapshot hero_state_read();
 // serverSource isn't us (= incoming damage, bleeds etc.).
 std::uintptr_t hero_state_locked_ptr();
 
+// v0.4.15 anticrash mode. When enabled, hero_state_tick switches to
+// polling Player.hero via the back-reference (instead of relying on
+// the alloc-hook watcher for re-locks) once the initial lock has been
+// stable for 5 seconds. At that moment hero_state asks hl_hook to
+// disable the hl_alloc_obj trampoline entirely so the game's allocator
+// runs with zero overhead from us. Trade-off: damage tracking stops.
+// Engaged by dllmain at boot when data/anticrash.flag is present.
+void hero_state_set_anticrash(bool on);
+bool hero_state_anticrash_armed();
+bool hero_state_anticrash_disarmed();   // true after the alloc-hook
+                                        // has actually been removed
+
 }  // namespace farever

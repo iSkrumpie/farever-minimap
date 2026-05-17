@@ -20,6 +20,15 @@ using AllocCallback = void(*)(std::uintptr_t obj);
 bool hl_hook_install(const LibHL& libhl);
 void hl_hook_uninstall();
 
+// v0.4.15: surgical disable of only the hl_alloc_obj hook (the
+// regular hl_hook_uninstall calls MH_DisableHook(MH_ALL_HOOKS) which
+// would also kill the D3D12 hooks). Used by the anticrash mode that
+// removes our alloc-hook trampoline once the Hero lock is stable, so
+// the game's HashLink allocator runs without any of our overhead.
+// Idempotent. The trampoline is removed; future hl_alloc_obj calls
+// from the game bypass us entirely.
+void hl_hook_disable_alloc();
+
 // Register a watcher for a Haxe class. The dispatcher reads the class
 // name from `hl_type.obj.name` on first allocation per type, matches
 // it against registered names, and caches the hl_type* → watcher map
