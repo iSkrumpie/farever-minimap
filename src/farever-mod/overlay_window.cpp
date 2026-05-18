@@ -37,6 +37,8 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <cstdio>
+#include <cstring>
 
 namespace farever {
 namespace {
@@ -87,6 +89,130 @@ struct OverlayWindow {
 OverlayWindow g_win{};
 
 // v0.4.17.9: no wndproc needed — we don't create our own window.
+
+// v0.5.2.3: when DCOMP swap chain creation fails on every variant
+// (so the overlay cannot render at all), drop three files next to
+// dinput8.dll: a ready-to-apply .reg file that disables AMD MPO,
+// an undo .reg that removes the same values again, and a plain-text
+// README that explains in 5 steps what the user should do. This is
+// the cheapest user-side fix for the AMD MPO rejection pattern from
+// issues #20 / #21 / #25 / #26: double-click, accept UAC, reboot.
+// The DLL only writes these files in the failure path so working
+// installs never see them. Content is fixed string literals only, so
+// no external input can reach the file contents.
+void write_amd_repair_files() {
+    if (!g_win.self_module) return;
+    wchar_t dll_path[MAX_PATH];
+    DWORD got = GetModuleFileNameW(g_win.self_module, dll_path, MAX_PATH);
+    if (got == 0 || got >= MAX_PATH) return;
+    wchar_t* last_slash = wcsrchr(dll_path, L'\\');
+    if (!last_slash) return;
+    *last_slash = L'\0';  // strip filename, keep directory
+
+    wchar_t reg_path[MAX_PATH];
+    wchar_t undo_path[MAX_PATH];
+    wchar_t txt_path[MAX_PATH];
+    swprintf_s(reg_path, MAX_PATH,
+               L"%s\\farever-fix-amd-overlay.reg", dll_path);
+    swprintf_s(undo_path, MAX_PATH,
+               L"%s\\farever-undo-amd-overlay-fix.reg", dll_path);
+    swprintf_s(txt_path, MAX_PATH,
+               L"%s\\OVERLAY_NOT_WORKING.txt", dll_path);
+
+    const char* reg_apply =
+        "Windows Registry Editor Version 5.00\r\n"
+        "\r\n"
+        "; farever-mod: AMD MPO disable workaround for DCOMP overlay\r\n"
+        "; rejection (issues #20, #21, #25, #26). Reboot after applying.\r\n"
+        "; To undo, run farever-undo-amd-overlay-fix.reg in this folder.\r\n"
+        "\r\n"
+        "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\Dwm]\r\n"
+        "\"DisableMPO\"=dword:00000001\r\n"
+        "\"OverlayTestMode\"=dword:00000005\r\n";
+
+    // Trailing "=-" deletes the registry value, restoring DWM
+    // default behaviour. Safe to run even if the apply .reg was
+    // never used: missing values just stay missing.
+    const char* reg_undo =
+        "Windows Registry Editor Version 5.00\r\n"
+        "\r\n"
+        "; farever-mod: undo the AMD MPO workaround. Reboot after\r\n"
+        "; running. Restores DWM's default Multi-Plane Overlay\r\n"
+        "; behaviour by removing both registry values.\r\n"
+        "\r\n"
+        "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\Dwm]\r\n"
+        "\"DisableMPO\"=-\r\n"
+        "\"OverlayTestMode\"=-\r\n";
+
+    const char* txt_content =
+        "farever-mod: overlay could not start\r\n"
+        "====================================\r\n"
+        "\r\n"
+        "Your GPU driver (most likely AMD) rejected the DirectComposition\r\n"
+        "swap chain we use to draw the overlay on top of the game. This\r\n"
+        "is a known issue with AMD's MPO (Multi-Plane Overlay) feature\r\n"
+        "and DirectComposition.\r\n"
+        "\r\n"
+        "Fix it in 5 steps:\r\n"
+        "\r\n"
+        "  1. Close the game.\r\n"
+        "  2. Double-click \"farever-fix-amd-overlay.reg\" in this folder.\r\n"
+        "  3. Click \"Yes\" on the User Account Control prompt.\r\n"
+        "  4. Reboot Windows.\r\n"
+        "  5. Launch the game again. The overlay should now show up.\r\n"
+        "\r\n"
+        "What this changes\r\n"
+        "-----------------\r\n"
+        "It sets two registry values under\r\n"
+        "  HKLM\\SOFTWARE\\Microsoft\\Windows\\Dwm\r\n"
+        "(DisableMPO=1 and OverlayTestMode=5) that turn off the GPU's\r\n"
+        "Multi-Plane Overlay optimization. This is a documented\r\n"
+        "Microsoft workaround and does not affect anything else than\r\n"
+        "the Windows compositor path. Performance impact on a modern\r\n"
+        "GPU is not measurable.\r\n"
+        "\r\n"
+        "How to undo\r\n"
+        "-----------\r\n"
+        "Double-click \"farever-undo-amd-overlay-fix.reg\" in this\r\n"
+        "folder, accept the UAC prompt, reboot. That removes both\r\n"
+        "registry values and Windows is back to its default Multi-\r\n"
+        "Plane Overlay behaviour.\r\n"
+        "\r\n"
+        "Still not working?\r\n"
+        "------------------\r\n"
+        "If the overlay still does not show after the reboot, open\r\n"
+        "an issue at\r\n"
+        "https://github.com/ramisotti13-eng/farever-minimap/issues\r\n"
+        "and attach farever-mod.log from this folder.\r\n";
+
+    auto write_file = [](const wchar_t* path, const char* data) -> bool {
+        HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                               nullptr);
+        if (h == INVALID_HANDLE_VALUE) return false;
+        DWORD written = 0;
+        DWORD len = static_cast<DWORD>(strlen(data));
+        BOOL ok = WriteFile(h, data, len, &written, nullptr);
+        CloseHandle(h);
+        return ok && written == len;
+    };
+
+    bool ok_reg  = write_file(reg_path,  reg_apply);
+    bool ok_undo = write_file(undo_path, reg_undo);
+    bool ok_txt  = write_file(txt_path,  txt_content);
+
+    char dir_utf8[MAX_PATH * 4] = {0};
+    WideCharToMultiByte(CP_UTF8, 0, dll_path, -1,
+                        dir_utf8, sizeof(dir_utf8) - 1, nullptr, nullptr);
+    logf("overlay_window: wrote AMD repair files to %s "
+         "(apply=%s undo=%s txt=%s) — user can double-click "
+         "farever-fix-amd-overlay.reg + reboot to fix, "
+         "farever-undo-amd-overlay-fix.reg to revert later",
+         dir_utf8,
+         ok_reg  ? "ok" : "FAIL",
+         ok_undo ? "ok" : "FAIL",
+         ok_txt  ? "ok" : "FAIL");
+}
 
 // v0.4.17.9: find the game's window (must wait for the game to
 // create it). Polls for up to ~30 s.
@@ -142,34 +268,157 @@ bool create_d3d12() {
         return false;
     }
 
+    // v0.5.3 issue #20/#21: log the adapter that the device picked.
+    // Two users (feelsmth, kesmese's friend) hit
+    // CreateSwapChainForComposition failing with DXGI_ERROR_INVALID_CALL
+    // even though the game itself runs fine on DX12. Composition swap
+    // chains have stricter driver/Windows-build requirements than plain
+    // DX12, so capturing adapter description + driver level here makes
+    // diagnosis possible without asking the user for dxdiag.
+    {
+        IDXGIAdapter1* adapter = nullptr;
+        if (SUCCEEDED(factory->EnumAdapters1(0, &adapter)) && adapter) {
+            DXGI_ADAPTER_DESC1 ad{};
+            if (SUCCEEDED(adapter->GetDesc1(&ad))) {
+                char name[128] = {0};
+                WideCharToMultiByte(CP_UTF8, 0, ad.Description, -1,
+                                    name, sizeof(name) - 1, nullptr, nullptr);
+                logf("overlay_window: adapter[0] '%s' vendor=0x%04x "
+                     "device=0x%04x vram=%lluMB",
+                     name, ad.VendorId, ad.DeviceId,
+                     (unsigned long long)(ad.DedicatedVideoMemory >> 20));
+            }
+            adapter->Release();
+        }
+    }
+
     RECT rc;
     GetClientRect(g_win.game_hwnd, &rc);
+    UINT w = static_cast<UINT>(rc.right - rc.left);
+    UINT h = static_cast<UINT>(rc.bottom - rc.top);
 
-    // Composition swap chain: not bound to an HWND, instead handed
-    // to DCOMP for rendering. Premultiplied alpha so the compositor
-    // blends our output over the game window's existing composition.
-    DXGI_SWAP_CHAIN_DESC1 sd{};
-    sd.Width       = static_cast<UINT>(rc.right - rc.left);
-    sd.Height      = static_cast<UINT>(rc.bottom - rc.top);
-    sd.Format      = DXGI_FORMAT_B8G8R8A8_UNORM;   // DCOMP prefers BGRA
-    sd.SampleDesc.Count = 1;
-    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.BufferCount = 2;
-    sd.Scaling     = DXGI_SCALING_STRETCH;
-    sd.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    sd.AlphaMode   = DXGI_ALPHA_MODE_PREMULTIPLIED;
-    sd.Flags       = 0;
-
-    IDXGISwapChain1* sc1 = nullptr;
-    HRESULT hr = factory->CreateSwapChainForComposition(
-        g_win.queue, &sd, nullptr, &sc1);
-    if (FAILED(hr)) {
-        logf("overlay_window: CreateSwapChainForComposition failed "
-             "hr=0x%08lx",
-             (unsigned long)hr);
+    // v0.5.2.3 issue #20/#21/#25/#26: log raw window dimensions +
+    // style so we can correlate composition swap chain failures with
+    // what the game window looks like at that moment. Note we
+    // deliberately do not try to label this "exclusive fullscreen"
+    // vs "borderless at native res" — both produce identical
+    // WS_POPUP + monitor-size signatures, and the labelling caused
+    // a confusing false-positive warning in NVIDIA users' logs
+    // before the (working) DCOMP attempt. For issue #24 the raw
+    // numbers plus the user's "is the overlay visible" report are
+    // what we actually need.
+    {
+        LONG style = GetWindowLongW(g_win.game_hwnd, GWL_STYLE);
+        logf("overlay_window: client=%ux%u style=0x%08lx",
+             w, h, (unsigned long)style);
+    }
+    if (w == 0 || h == 0) {
+        logf("overlay_window: game window has 0x0 client area, "
+             "aborting DCOMP setup. Game may have been minimized "
+             "during the hero-lock stability window.");
         factory->Release();
         return false;
     }
+
+    // v0.5.2.1 issue #20/#21: try composition swap chain with several
+    // descriptor variants in order. Some drivers (older Intel iGPU,
+    // pre-1809 Win10) reject specific format / swap-effect combos with
+    // DXGI_ERROR_INVALID_CALL (0x887a0001), and AMD MPO interaction
+    // can reject everything with E_INVALIDARG (0x80070057) — for that
+    // case the registry workaround (DisableMPO=1 under
+    // HKLM\SOFTWARE\Microsoft\Windows\Dwm) is the real fix. Each
+    // variant logs its own failure so we can see which combo the
+    // driver accepts or rejects.
+    struct ChainVariant {
+        const char* name;
+        DXGI_FORMAT format;
+        DXGI_SWAP_EFFECT swap_effect;
+        DXGI_ALPHA_MODE alpha;
+        DXGI_SCALING scaling;
+        UINT buffer_count;
+    };
+    const ChainVariant variants[] = {
+        // A: original (BGRA + premultiplied + flip-discard, stretch).
+        {"BGRA8/premul/flip-discard",
+         DXGI_FORMAT_B8G8R8A8_UNORM,
+         DXGI_SWAP_EFFECT_FLIP_DISCARD,
+         DXGI_ALPHA_MODE_PREMULTIPLIED,
+         DXGI_SCALING_STRETCH, 2},
+        // B: RGBA instead of BGRA. Some Intel iGPU drivers prefer this
+        // for composition swap chains even though the docs say BGRA.
+        {"RGBA8/premul/flip-discard",
+         DXGI_FORMAT_R8G8B8A8_UNORM,
+         DXGI_SWAP_EFFECT_FLIP_DISCARD,
+         DXGI_ALPHA_MODE_PREMULTIPLIED,
+         DXGI_SCALING_STRETCH, 2},
+        // C: BGRA + flip-sequential. Sequential keeps a back buffer
+        // alive for composition; some older WDDM 1.x drivers needed
+        // this before flip-discard was supported for DCOMP chains.
+        {"BGRA8/premul/flip-sequential",
+         DXGI_FORMAT_B8G8R8A8_UNORM,
+         DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+         DXGI_ALPHA_MODE_PREMULTIPLIED,
+         DXGI_SCALING_STRETCH, 2},
+        // D (v0.5.2.3): scaling=NONE. STRETCH asks the driver to
+        // place the swap chain in a hardware scaling plane; some AMD
+        // MPO implementations reject that and accept NONE because it
+        // skips the hardware overlay path entirely.
+        {"BGRA8/premul/flip-discard/scale-none",
+         DXGI_FORMAT_B8G8R8A8_UNORM,
+         DXGI_SWAP_EFFECT_FLIP_DISCARD,
+         DXGI_ALPHA_MODE_PREMULTIPLIED,
+         DXGI_SCALING_NONE, 2},
+        // E (v0.5.2.3): triple buffering. A handful of WDDM
+        // configurations reject 2 buffers on composition swap chains
+        // but accept 3 — costs ~50 MB more VRAM but is worth a shot
+        // before declaring the system incompatible.
+        {"BGRA8/premul/flip-discard/3buf",
+         DXGI_FORMAT_B8G8R8A8_UNORM,
+         DXGI_SWAP_EFFECT_FLIP_DISCARD,
+         DXGI_ALPHA_MODE_PREMULTIPLIED,
+         DXGI_SCALING_STRETCH, 3},
+    };
+
+    IDXGISwapChain1* sc1 = nullptr;
+    HRESULT hr = E_FAIL;
+    const ChainVariant* chosen = nullptr;
+    for (const auto& v : variants) {
+        DXGI_SWAP_CHAIN_DESC1 sd{};
+        sd.Width       = w;
+        sd.Height      = h;
+        sd.Format      = v.format;
+        sd.SampleDesc.Count = 1;
+        sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount = v.buffer_count;
+        sd.Scaling     = v.scaling;
+        sd.SwapEffect  = v.swap_effect;
+        sd.AlphaMode   = v.alpha;
+        sd.Flags       = 0;
+
+        hr = factory->CreateSwapChainForComposition(
+            g_win.queue, &sd, nullptr, &sc1);
+        if (SUCCEEDED(hr)) {
+            chosen = &v;
+            logf("overlay_window: composition swap chain ok with '%s'",
+                 v.name);
+            break;
+        }
+        logf("overlay_window: variant '%s' rejected hr=0x%08lx, "
+             "trying next",
+             v.name, (unsigned long)hr);
+    }
+    if (FAILED(hr) || !sc1) {
+        logf("overlay_window: all composition swap chain variants "
+             "failed (last hr=0x%08lx). Overlay cannot render on this "
+             "system. Likely cause: AMD MPO rejecting DCOMP overlays. "
+             "Writing repair files to the Farever folder so the user "
+             "can apply the registry workaround without manual edits.",
+             (unsigned long)hr);
+        write_amd_repair_files();
+        factory->Release();
+        return false;
+    }
+    (void)chosen;  // only used in the log line above
 
     hr = sc1->QueryInterface(__uuidof(IDXGISwapChain3),
                              reinterpret_cast<void**>(&g_win.swap_chain));
@@ -219,7 +468,7 @@ bool create_d3d12() {
     logf("overlay_window: D3D12+DCOMP ready, device=%p queue=%p swap=%p "
          "(%ux%u)",
          (void*)g_win.device, (void*)g_win.queue,
-         (void*)g_win.swap_chain, sd.Width, sd.Height);
+         (void*)g_win.swap_chain, w, h);
     return true;
 }
 
