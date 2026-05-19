@@ -4,12 +4,76 @@
 
 namespace farever {
 
-// Snapshot of the local Hero used by the minimap render.
+// Snapshot of the local Hero used by the minimap render and the plugin
+// API. Numeric attributes come from Hero.attr (HeroAttributes /
+// UnitAttributes). All `attr_ok`-gated values are zero when the lock
+// is not held or when the attr chase fails this tick.
 struct HeroSnapshot {
     bool   locked;          // false until isMe + bidirectional check passes
     double x, y, z;
     double rot_z;
-    bool   in_combat;       // ent.Hero.isInCombat (HBOOL @ +672)
+    bool   in_combat;       // ent.Hero.isInCombat
+    double combat_start;    // Hero.combatStartTime (game seconds)
+    int    level;           // Hero._level
+    bool   has_target;      // Hero.target != 0
+
+    bool   attr_ok;         // true if attr pointer + reads succeeded
+
+    // Primary character stats
+    double vitality;
+    double strength;
+    double dexterity;
+    double faith;
+    double intellect;
+
+    // Combat
+    double crit_chance;
+    double crit_damage;
+    double armor_penetration;
+    double spell_penetration;
+    double fervor;
+    double block_mitigation;
+    double dodge_chance;
+    double magic_mastery;
+    double physical_mastery;
+    double spell_cast_time_reduction;
+    double knock_resistance;
+    double cooldown_reduction;
+
+    // Defense
+    double armor;
+    double magic_armor;
+    double magic_reduction;
+
+    // Health and energy
+    double health;
+    double max_health;
+    double health_regen;
+    double shield;
+    double energy;
+    double energy_regen;
+
+    // Misc
+    double move_speed_factor;
+    double damage;            // base damage modifier
+    double heal;              // base heal output
+
+    // Hero-only (HeroAttributes layer)
+    bool   hero_attr_ok;
+    double poise;
+    double poise_regen;
+    double oxygen;
+    double rage;
+    double rage_regen;
+    double spark;
+    double spark_regen;
+    double combo_point;
+    double focus;
+    double damage_modifier;
+    double damage_taken_modifier;
+    double heal_given_multiplier;
+    double shield_power_multiplier;
+    double glide_speed;
 };
 
 // Register the ent.Hero alloc-hook watcher. The watcher pushes raw

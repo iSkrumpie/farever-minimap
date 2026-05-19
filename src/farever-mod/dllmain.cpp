@@ -16,6 +16,7 @@
 #include "hl_hook.h"
 #include "damage.h"
 #include "hero_state.h"
+#include "foe_state.h"
 #include "skill_resolve.h"
 #include "entity_state.h"
 #include "d3d12_hook.h"
@@ -53,6 +54,7 @@ DWORD WINAPI worker_thread(LPVOID) {
     fv::skill_resolve_init(g_libhl);
     fv::damage_start(g_libhl);
     fv::hero_state_start();
+    fv::foe_state_start();
 
     if (!fv::hl_hook_install(g_libhl)) {
         fv::logf("worker: hl_hook_install failed");
@@ -99,6 +101,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             // stop the render ticks so they don't keep firing into
             // freed state if the teardown takes longer than expected.
             fv::hero_state_stop();
+            fv::foe_state_stop();
             fv::damage_stop();
             // v0.5.1 (issue #18 audio choppy on quit): cleanly stop
             // the overlay-window render thread + free its D3D12 +

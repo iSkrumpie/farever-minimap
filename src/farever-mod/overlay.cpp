@@ -812,6 +812,7 @@ void bezel_draw_base(ImDrawList* dl, const BezelButton& b) {
     dl->AddCircleFilled(b.center, b.radius, fill, 32);
     dl->AddCircle(b.center, b.radius, kColBezel, 32, 2.0f);
 }
+
 void bezel_draw_plus(ImDrawList* dl, const BezelButton& b) {
     bezel_draw_base(dl, b);
     float a = b.radius * 0.45f;
@@ -860,13 +861,10 @@ void bezel_draw_filter(ImDrawList* dl, const BezelButton& b, bool active) {
 void bezel_draw_key(ImDrawList* dl, const BezelButton& b, bool active) {
     bezel_draw_base(dl, b);
     ImU32 c = active ? IM_COL32(255, 255, 200, 255) : kColIcon;
-    // bow (round head of the key) on the left
     ImVec2 bow(b.center.x - 3.0f, b.center.y - 1.0f);
     dl->AddCircle(bow, 3.0f, c, 14, 1.6f);
-    // shaft to the right
     dl->AddLine({bow.x + 3.0f, bow.y},
                 {b.center.x + 5.0f, bow.y}, c, 1.8f);
-    // two teeth at the tip
     dl->AddLine({b.center.x + 3.0f, bow.y},
                 {b.center.x + 3.0f, bow.y + 3.0f}, c, 1.8f);
     dl->AddLine({b.center.x + 5.0f, bow.y},
@@ -875,13 +873,10 @@ void bezel_draw_key(ImDrawList* dl, const BezelButton& b, bool active) {
 void bezel_draw_lock(ImDrawList* dl, const BezelButton& b, bool locked) {
     bezel_draw_base(dl, b);
     ImU32 c = locked ? IM_COL32(255, 220, 100, 255) : kColIcon;
-    // Body of the padlock
     ImVec2 tl(b.center.x - 4.0f, b.center.y);
     ImVec2 br(b.center.x + 4.0f, b.center.y + 4.5f);
     dl->AddRect(tl, br, c, 0.8f, 0, 1.5f);
-    // Keyhole
     dl->AddCircleFilled({b.center.x, b.center.y + 2.0f}, 0.9f, c, 8);
-    // Shackle — closed loop when locked, open hook when not
     ImVec2 lShank(b.center.x - 2.5f, b.center.y);
     ImVec2 lTop  (b.center.x - 2.5f, b.center.y - 3.5f);
     ImVec2 rTop  (b.center.x + 2.5f, b.center.y - 3.5f);
@@ -893,17 +888,14 @@ void bezel_draw_lock(ImDrawList* dl, const BezelButton& b, bool locked) {
 void bezel_draw_chest(ImDrawList* dl, const BezelButton& b, bool active) {
     bezel_draw_base(dl, b);
     ImU32 c = active ? IM_COL32(255, 220, 100, 255) : kColIcon;
-    // body
     float w = 5.5f, hUp = 4.0f, hDn = 2.5f;
     ImVec2 tl(b.center.x - w, b.center.y - hUp);
     ImVec2 tr(b.center.x + w, b.center.y - hUp);
     ImVec2 bl(b.center.x - w, b.center.y + hDn);
     ImVec2 br(b.center.x + w, b.center.y + hDn);
     dl->AddRect(tl, br, c, 0.5f, 0, 1.6f);
-    // lid seam
     dl->AddLine({tl.x, b.center.y - 1.0f},
                 {tr.x, b.center.y - 1.0f}, c, 1.4f);
-    // lock plate
     dl->AddRectFilled(
         {b.center.x - 1.0f, b.center.y - 1.5f},
         {b.center.x + 1.0f, b.center.y + 1.0f}, c);

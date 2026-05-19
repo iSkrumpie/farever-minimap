@@ -37,6 +37,87 @@ constexpr std::size_t OFF_HERO_POSY         = 152;
 constexpr std::size_t OFF_HERO_POSZ         = 160;
 constexpr std::size_t OFF_HERO_ROTZ         = 168;
 constexpr std::size_t OFF_HERO_ISINCOMBAT   = 672;   // u8
+constexpr std::size_t OFF_HERO_COMBAT_START = 688;   // f64 (ent.Unit.combatStartTime)
+constexpr std::size_t OFF_HERO_LEVEL        = 976;   // i32 (ent.Unit._level)
+constexpr std::size_t OFF_HERO_ATTR         = 968;   // HOBJ (ent.Unit.attr -> UnitAttributes)
+
+constexpr std::size_t OFF_HERO_TARGET       = 640;   // i64 (ent.Unit.target)
+
+// UnitAttributes layout: the f64 block of interest runs from offset
+// 48 (vitality) through offset 328 (heal) — 30 consecutive doubles
+// covering stats, combat numbers, defense, resources, modifiers.
+// We do ONE 240-byte batched read into a fixed-layout local struct,
+// keyed by the indices below (each index = (offset - 48) / 8).
+constexpr std::size_t OFF_ATTR_BLOCK_BASE   = 48;
+constexpr std::size_t OFF_ATTR_BLOCK_BYTES  = 280;   // covers up to heal@320
+
+enum UAIdx : int {
+    UA_VITALITY = 0,            // 48
+    UA_STRENGTH,                // 56
+    UA_DEXTERITY,               // 64
+    UA_FAITH,                   // 72
+    UA_INTELLECT,               // 80
+    UA_CRIT_CHANCE_RATING,      // 88
+    UA_CRIT_CHANCE,             // 96
+    UA_CRIT_DAMAGE,             // 104
+    UA_ARMOR_PEN_RATING,        // 112
+    UA_ARMOR_PEN,               // 120
+    UA_SPELL_PEN_RATING,        // 128
+    UA_SPELL_PEN,               // 136
+    UA_FERVOR_RATING,           // 144
+    UA_FERVOR,                  // 152
+    UA_BLOCK_MITIGATION,        // 160
+    UA_DODGE_CHANCE,            // 168
+    UA_MAGIC_MASTERY,           // 176
+    UA_PHYSICAL_MASTERY,        // 184
+    UA_SPELL_CAST_TIME_RED,     // 192
+    UA_KNOCK_RESISTANCE,        // 200
+    UA_COOLDOWN_REDUCTION,      // 208
+    UA_ARMOR,                   // 216
+    UA_MAGIC_ARMOR,             // 224
+    UA_MAGIC_REDUCTION,         // 232
+    UA_HEALTH,                  // 240
+    UA_MAX_HEALTH,              // 248
+    UA_HEALTH_REGEN,            // 256
+    UA_SHIELD,                  // 264
+    UA_ENERGY,                  // 272
+    UA_ENERGY_REGEN,            // 280
+    UA_LIFETIME,                // 288
+    UA_MOVE_SPEED_FACTOR,       // 296
+    UA_THREAT,                  // 304
+    UA_DAMAGE,                  // 312
+    UA_HEAL,                    // 320
+    UA_COUNT,
+};
+
+// HeroAttributes extends UnitAttributes. Hero-only fields live from
+// offset 376 (poise) onwards. Another contiguous f64 block; same
+// trick — one batched read, fixed indices.
+constexpr std::size_t OFF_HATTR_BLOCK_BASE  = 376;
+constexpr std::size_t OFF_HATTR_BLOCK_BYTES = 152;   // through glideSpeed@520
+
+enum HAIdx : int {
+    HA_POISE = 0,               // 376
+    HA_POISE_CONSUME,           // 384
+    HA_POISE_REGEN,             // 392
+    HA_OXYGEN,                  // 400
+    HA_OXYGEN_REGEN,            // 408
+    HA_OXYGEN_LOSS,             // 416
+    HA_RAGE,                    // 424
+    HA_RAGE_REGEN,              // 432
+    HA_RAGE_GAIN_FACTOR,        // 440
+    HA_SPARK,                   // 448
+    HA_SPARK_REGEN,             // 456
+    HA_COMBO_POINT,             // 464
+    HA_FOCUS,                   // 472
+    HA_SPARK_PARTICLE,          // 480
+    HA_DAMAGE_MODIFIER,         // 488
+    HA_DAMAGE_TAKEN_MODIFIER,   // 496
+    HA_HEAL_GIVEN_MULT,         // 504
+    HA_SHIELD_POWER_MULT,       // 512
+    HA_GLIDE_SPEED,             // 520
+    HA_COUNT,
+};
 
 constexpr std::size_t OFF_PLAYER_HERO       = 272;   // Player.hero (back-ref)
 constexpr std::size_t OFF_PLAYER_ISME       = 280;   // u8
@@ -275,6 +356,86 @@ void publish() {
     if (mem_read_u8(a + OFF_HERO_ISINCOMBAT, &in_combat)) {
         s.in_combat = (in_combat != 0);
     }
+    mem_read_bytes(a + OFF_HERO_COMBAT_START, &s.combat_start,
+                   sizeof(s.combat_start));
+    std::int32_t lvl = 0;
+    if (mem_read_i32(a + OFF_HERO_LEVEL, &lvl)) s.level = (int)lvl;
+    std::uint64_t tgt = 0;
+    if (mem_read_u64(a + OFF_HERO_TARGET, &tgt)) {
+        s.has_target = (tgt != 0);
+    }
+
+    // Chase Hero.attr -> UnitAttributes / HeroAttributes. The pointer
+    // can be null while the Hero is mid-spawn; validate before any
+    // dereference. Two batched reads: 35 contiguous f64s from the
+    // UnitAttributes layer, then 19 more from the HeroAttributes
+    // extension if the runtime type is the Hero subclass.
+    std::uint64_t attr_u64 = 0;
+    if (mem_read_u64(a + OFF_HERO_ATTR, &attr_u64)) {
+        std::uintptr_t attr = static_cast<std::uintptr_t>(attr_u64);
+        if (mem_is_userland(attr)) {
+            double ua[UA_COUNT]{};
+            if (mem_read_bytes(attr + OFF_ATTR_BLOCK_BASE, ua,
+                               OFF_ATTR_BLOCK_BYTES)) {
+                s.attr_ok                  = true;
+                s.vitality                 = ua[UA_VITALITY];
+                s.strength                 = ua[UA_STRENGTH];
+                s.dexterity                = ua[UA_DEXTERITY];
+                s.faith                    = ua[UA_FAITH];
+                s.intellect                = ua[UA_INTELLECT];
+                s.crit_chance              = ua[UA_CRIT_CHANCE];
+                s.crit_damage              = ua[UA_CRIT_DAMAGE];
+                s.armor_penetration        = ua[UA_ARMOR_PEN];
+                s.spell_penetration        = ua[UA_SPELL_PEN];
+                s.fervor                   = ua[UA_FERVOR];
+                s.block_mitigation         = ua[UA_BLOCK_MITIGATION];
+                s.dodge_chance             = ua[UA_DODGE_CHANCE];
+                s.magic_mastery            = ua[UA_MAGIC_MASTERY];
+                s.physical_mastery         = ua[UA_PHYSICAL_MASTERY];
+                s.spell_cast_time_reduction= ua[UA_SPELL_CAST_TIME_RED];
+                s.knock_resistance         = ua[UA_KNOCK_RESISTANCE];
+                s.cooldown_reduction       = ua[UA_COOLDOWN_REDUCTION];
+                s.armor                    = ua[UA_ARMOR];
+                s.magic_armor              = ua[UA_MAGIC_ARMOR];
+                s.magic_reduction          = ua[UA_MAGIC_REDUCTION];
+                s.health                   = ua[UA_HEALTH];
+                s.max_health               = ua[UA_MAX_HEALTH];
+                s.health_regen             = ua[UA_HEALTH_REGEN];
+                s.shield                   = ua[UA_SHIELD];
+                s.energy                   = ua[UA_ENERGY];
+                s.energy_regen             = ua[UA_ENERGY_REGEN];
+                s.move_speed_factor        = ua[UA_MOVE_SPEED_FACTOR];
+                s.damage                   = ua[UA_DAMAGE];
+                s.heal                     = ua[UA_HEAL];
+            }
+
+            // Hero-only second block. The attribute object's runtime
+            // type may be plain UnitAttributes (e.g. on Foes), in
+            // which case offsets 376+ are out of bounds. We can't
+            // tell just from the pointer, so we attempt the read and
+            // let mem_read_bytes' SEH guard fail it gracefully.
+            double ha[HA_COUNT]{};
+            if (mem_read_bytes(attr + OFF_HATTR_BLOCK_BASE, ha,
+                               OFF_HATTR_BLOCK_BYTES)) {
+                s.hero_attr_ok            = true;
+                s.poise                   = ha[HA_POISE];
+                s.poise_regen             = ha[HA_POISE_REGEN];
+                s.oxygen                  = ha[HA_OXYGEN];
+                s.rage                    = ha[HA_RAGE];
+                s.rage_regen              = ha[HA_RAGE_REGEN];
+                s.spark                   = ha[HA_SPARK];
+                s.spark_regen             = ha[HA_SPARK_REGEN];
+                s.combo_point             = ha[HA_COMBO_POINT];
+                s.focus                   = ha[HA_FOCUS];
+                s.damage_modifier         = ha[HA_DAMAGE_MODIFIER];
+                s.damage_taken_modifier   = ha[HA_DAMAGE_TAKEN_MODIFIER];
+                s.heal_given_multiplier   = ha[HA_HEAL_GIVEN_MULT];
+                s.shield_power_multiplier = ha[HA_SHIELD_POWER_MULT];
+                s.glide_speed             = ha[HA_GLIDE_SPEED];
+            }
+        }
+    }
+
     g_snapshot = s;
 }
 

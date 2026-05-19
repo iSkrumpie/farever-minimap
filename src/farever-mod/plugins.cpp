@@ -13,6 +13,7 @@
 #include "plugins.h"
 #include "log.h"
 #include "hero_state.h"
+#include "foe_state.h"
 #include "aggregator.h"
 
 extern "C" {
@@ -179,6 +180,181 @@ int api_player_locked(lua_State* L) {
 int api_player_in_combat(lua_State* L) {
     HeroSnapshot h = hero_state_read();
     lua_pushboolean(L, h.in_combat ? 1 : 0);
+    return 1;
+}
+
+// Macro-generated getters that read one f64 (or i32 / bool) field
+// from the HeroSnapshot and push it onto the Lua stack. Two flavours:
+// UA_GETTER for fields gated by attr_ok (UnitAttributes layer),
+// HA_GETTER for hero-only fields gated by hero_attr_ok.
+#define UA_GETTER(name, field) \
+    int api_player_##name(lua_State* L) { \
+        HeroSnapshot h = hero_state_read(); \
+        lua_pushnumber(L, h.attr_ok ? h.field : 0.0); \
+        return 1; \
+    }
+#define HA_GETTER(name, field) \
+    int api_player_##name(lua_State* L) { \
+        HeroSnapshot h = hero_state_read(); \
+        lua_pushnumber(L, h.hero_attr_ok ? h.field : 0.0); \
+        return 1; \
+    }
+
+// Health and energy
+UA_GETTER(health,       health)
+UA_GETTER(max_health,   max_health)
+UA_GETTER(health_regen, health_regen)
+UA_GETTER(shield,       shield)
+UA_GETTER(energy,       energy)
+UA_GETTER(energy_regen, energy_regen)
+
+int api_player_health_pct(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    double pct = 0.0;
+    if (h.attr_ok && h.max_health > 0.0) pct = h.health / h.max_health;
+    lua_pushnumber(L, pct);
+    return 1;
+}
+
+// Primary stats
+UA_GETTER(vitality,  vitality)
+UA_GETTER(strength,  strength)
+UA_GETTER(dexterity, dexterity)
+UA_GETTER(faith,     faith)
+UA_GETTER(intellect, intellect)
+
+// Combat numbers
+UA_GETTER(crit_chance,                crit_chance)
+UA_GETTER(crit_damage,                crit_damage)
+UA_GETTER(armor_penetration,          armor_penetration)
+UA_GETTER(spell_penetration,          spell_penetration)
+UA_GETTER(fervor,                     fervor)
+UA_GETTER(block_mitigation,           block_mitigation)
+UA_GETTER(dodge_chance,               dodge_chance)
+UA_GETTER(magic_mastery,              magic_mastery)
+UA_GETTER(physical_mastery,           physical_mastery)
+UA_GETTER(spell_cast_time_reduction,  spell_cast_time_reduction)
+UA_GETTER(knock_resistance,           knock_resistance)
+UA_GETTER(cooldown_reduction,         cooldown_reduction)
+
+// Defense
+UA_GETTER(armor,            armor)
+UA_GETTER(magic_armor,      magic_armor)
+UA_GETTER(magic_reduction,  magic_reduction)
+
+// Misc
+UA_GETTER(move_speed_factor, move_speed_factor)
+UA_GETTER(damage,            damage)
+UA_GETTER(heal,              heal)
+
+// Hero-only class resources
+HA_GETTER(poise,                   poise)
+HA_GETTER(poise_regen,             poise_regen)
+HA_GETTER(oxygen,                  oxygen)
+HA_GETTER(rage,                    rage)
+HA_GETTER(rage_regen,              rage_regen)
+HA_GETTER(spark,                   spark)
+HA_GETTER(spark_regen,             spark_regen)
+HA_GETTER(combo_point,             combo_point)
+HA_GETTER(focus,                   focus)
+HA_GETTER(damage_modifier,         damage_modifier)
+HA_GETTER(damage_taken_modifier,   damage_taken_modifier)
+HA_GETTER(heal_given_multiplier,   heal_given_multiplier)
+HA_GETTER(shield_power_multiplier, shield_power_multiplier)
+HA_GETTER(glide_speed,             glide_speed)
+
+#undef UA_GETTER
+#undef HA_GETTER
+
+int api_player_level(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    lua_pushinteger(L, h.level);
+    return 1;
+}
+int api_player_combat_start(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    lua_pushnumber(L, h.combat_start);
+    return 1;
+}
+int api_player_has_target(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    lua_pushboolean(L, h.has_target ? 1 : 0);
+    return 1;
+}
+
+// === farever.foes API ===
+//
+// Each foe is returned as a Lua table with these fields:
+//   x, y, z, rot_z, dist, hp, max_hp, hp_pct, shield, level,
+//   in_combat (bool), has_target (bool), is_target (bool)
+//
+// `is_target` is set on the foe the local Hero is currently targeting
+// (handy for plugins that want to highlight the active boss). The
+// list is sorted nearest-first.
+
+void push_foe_table(lua_State* L, const FoeEntry& f, bool is_target) {
+    lua_newtable(L);
+    lua_pushnumber(L, f.x);          lua_setfield(L, -2, "x");
+    lua_pushnumber(L, f.y);          lua_setfield(L, -2, "y");
+    lua_pushnumber(L, f.z);          lua_setfield(L, -2, "z");
+    lua_pushnumber(L, f.rot_z);      lua_setfield(L, -2, "rot_z");
+    lua_pushnumber(L, f.dist);       lua_setfield(L, -2, "dist");
+    lua_pushnumber(L, f.hp);         lua_setfield(L, -2, "hp");
+    lua_pushnumber(L, f.max_hp);     lua_setfield(L, -2, "max_hp");
+    lua_pushnumber(L, f.hp_pct);     lua_setfield(L, -2, "hp_pct");
+    lua_pushnumber(L, f.shield);     lua_setfield(L, -2, "shield");
+    lua_pushinteger(L, f.level);     lua_setfield(L, -2, "level");
+    lua_pushboolean(L, f.in_combat); lua_setfield(L, -2, "in_combat");
+    lua_pushboolean(L, f.has_target);lua_setfield(L, -2, "has_target");
+    lua_pushboolean(L, is_target);   lua_setfield(L, -2, "is_target");
+}
+
+int api_foes_count(lua_State* L) {
+    FoesSnapshot s = foe_state_read();
+    lua_pushinteger(L, (lua_Integer)s.count);
+    return 1;
+}
+
+int api_foes_list(lua_State* L) {
+    FoesSnapshot s = foe_state_read();
+    lua_createtable(L, (int)s.count, 0);
+    for (std::size_t i = 0; i < s.count; ++i) {
+        bool is_tgt = (s.target_index == (int)i);
+        push_foe_table(L, s.foes[i], is_tgt);
+        lua_rawseti(L, -2, (lua_Integer)(i + 1));  // 1-based
+    }
+    return 1;
+}
+
+int api_foes_target(lua_State* L) {
+    FoesSnapshot s = foe_state_read();
+    if (s.target_index < 0 ||
+        s.target_index >= (int)s.count) {
+        lua_pushnil(L);
+        return 1;
+    }
+    push_foe_table(L, s.foes[s.target_index], true);
+    return 1;
+}
+
+int api_foes_nearest(lua_State* L) {
+    FoesSnapshot s = foe_state_read();
+    if (s.count == 0) { lua_pushnil(L); return 1; }
+    bool is_tgt = (s.target_index == 0);
+    push_foe_table(L, s.foes[0], is_tgt);
+    return 1;
+}
+
+int api_foes_in_combat(lua_State* L) {
+    // Count of currently in-combat foes — handy "are we in a fight"
+    // sanity check that does not depend on the player's own combat
+    // flag (which can lag for a beat after the last hit).
+    FoesSnapshot s = foe_state_read();
+    int n = 0;
+    for (std::size_t i = 0; i < s.count; ++i) {
+        if (s.foes[i].in_combat) ++n;
+    }
+    lua_pushinteger(L, n);
     return 1;
 }
 
@@ -538,12 +714,50 @@ void install_api(lua_State* L) {
     lua_newtable(L);  // farever
 
     lua_newtable(L);  // farever.player
-    lua_pushcfunction(L, api_player_x);         lua_setfield(L, -2, "x");
-    lua_pushcfunction(L, api_player_y);         lua_setfield(L, -2, "y");
-    lua_pushcfunction(L, api_player_z);         lua_setfield(L, -2, "z");
-    lua_pushcfunction(L, api_player_rot);       lua_setfield(L, -2, "rot_z");
-    lua_pushcfunction(L, api_player_locked);    lua_setfield(L, -2, "locked");
-    lua_pushcfunction(L, api_player_in_combat); lua_setfield(L, -2, "in_combat");
+    #define BIND(name) do { \
+        lua_pushcfunction(L, api_player_##name); \
+        lua_setfield(L, -2, #name); \
+    } while (0)
+
+    // Position / orientation / lock state
+    BIND(x); BIND(y); BIND(z);
+    lua_pushcfunction(L, api_player_rot); lua_setfield(L, -2, "rot_z");
+    BIND(locked); BIND(in_combat); BIND(has_target);
+    BIND(level); BIND(combat_start);
+
+    // Health and energy
+    BIND(health); BIND(max_health); BIND(health_pct); BIND(health_regen);
+    BIND(shield); BIND(energy); BIND(energy_regen);
+
+    // Primary stats
+    BIND(vitality); BIND(strength); BIND(dexterity);
+    BIND(faith);    BIND(intellect);
+
+    // Combat numbers
+    BIND(crit_chance);  BIND(crit_damage);
+    BIND(armor_penetration); BIND(spell_penetration);
+    BIND(fervor); BIND(block_mitigation); BIND(dodge_chance);
+    BIND(magic_mastery); BIND(physical_mastery);
+    BIND(spell_cast_time_reduction);
+    BIND(knock_resistance); BIND(cooldown_reduction);
+
+    // Defense
+    BIND(armor); BIND(magic_armor); BIND(magic_reduction);
+
+    // Misc modifiers
+    BIND(move_speed_factor); BIND(damage); BIND(heal);
+
+    // Hero-only class resources
+    BIND(poise); BIND(poise_regen);
+    BIND(oxygen);
+    BIND(rage); BIND(rage_regen);
+    BIND(spark); BIND(spark_regen);
+    BIND(combo_point); BIND(focus);
+    BIND(damage_modifier); BIND(damage_taken_modifier);
+    BIND(heal_given_multiplier); BIND(shield_power_multiplier);
+    BIND(glide_speed);
+
+    #undef BIND
     lua_setfield(L, -2, "player");
 
     lua_newtable(L);  // farever.dps
@@ -552,6 +766,14 @@ void install_api(lua_State* L) {
     lua_pushcfunction(L, api_dps_elapsed);   lua_setfield(L, -2, "elapsed");
     lua_pushcfunction(L, api_dps_in_combat); lua_setfield(L, -2, "in_combat");
     lua_setfield(L, -2, "dps");
+
+    lua_newtable(L);  // farever.foes
+    lua_pushcfunction(L, api_foes_count);     lua_setfield(L, -2, "count");
+    lua_pushcfunction(L, api_foes_list);      lua_setfield(L, -2, "list");
+    lua_pushcfunction(L, api_foes_target);    lua_setfield(L, -2, "target");
+    lua_pushcfunction(L, api_foes_nearest);   lua_setfield(L, -2, "nearest");
+    lua_pushcfunction(L, api_foes_in_combat); lua_setfield(L, -2, "in_combat");
+    lua_setfield(L, -2, "foes");
 
     lua_newtable(L);  // farever.log
     lua_pushcfunction(L, api_log_info); lua_setfield(L, -2, "info");
