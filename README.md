@@ -1,9 +1,9 @@
-﻿# Farever Minimap & DPS
+# Farever Minimap & DPS
 
 ![Farever Minimap](minimap.gif)
 ![Farever DPS meter](dpsmeter.gif)
 
-A drop-in overlay for Farever (Shiro Games) with two tools in one DLL:
+A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
 
 * **Minimap**: compass with a heading arrow, world mosaic underneath,
   the POIs the game already tracks (obelisks, respawn points,
@@ -15,10 +15,41 @@ A drop-in overlay for Farever (Shiro Games) with two tools in one DLL:
   numbers the game itself shows above mobs, so other party members,
   ambient world damage and bleeds on you are out of the picture by
   construction.
+* **Plugin runtime** (new in 0.5.3): drop your own Lua scripts into
+  `data/plugins/` and the mod loads them sandboxed, with hot reload
+  on save. See [plugin authoring guide](data/plugins/README.md).
+
+## Which release do I download?
+
+There are two parallel builds on the [Releases page](../../releases).
+Pick once and stick with it.
+
+* **[v0.5.3](../../releases/latest)** — the main, actively developed
+  build. Use this unless your machine cannot run it.
+* **[v0.4.15](../../releases/tag/v0.4.15)** — a frozen legacy build
+  for users where v0.5.x cannot get the overlay up. This mostly hits
+  older AMD cards with the MPO bug, very old Windows builds, or
+  unusual driver configurations. v0.4.x renders directly into the
+  game's swap chain and avoids the DirectComposition path entirely,
+  which dodges that whole class of problem.
+
+| Feature                              | v0.5.3                        | v0.4.15                              |
+| ------------------------------------ | ----------------------------- | ------------------------------------ |
+| Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
+| Loot tracker window                  | Yes                           | No                                   |
+| UI scale slider for 4K monitors      | Yes                           | No                                   |
+| Lua plugin system                    | Yes                           | No                                   |
+| Composition overlay (DCOMP)          | Yes                           | No, renders on the game's swap chain |
+| Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
+| Known long-session access violation  | No                            | Possible after long AFK DPS farming  |
+
+If v0.5.3 does not bring up the overlay on your machine, try v0.4.15
+before opening an issue. If neither works, then open the issue and
+attach `farever-mod.log` from your Farever folder.
 
 ## How to install
 
-1. Grab the latest `.zip` from the [Releases page](../../releases).
+1. Pick a release above and grab the matching `.zip`.
 2. Extract straight into your Farever folder, the one that contains
    `Farever.exe`. Typical Steam path:
    `C:\Program Files (x86)\Steam\steamapps\common\Farever`.
@@ -120,6 +151,27 @@ right one much easier when several are stacked.
   drop progressively (Crit%, Max, Hits, Total, %). At the narrowest
   size you get just the icon and the DPS column.
 
+## Plugin runtime (v0.5.3+)
+
+Drop a `.lua` file into `data/plugins/` and the mod loads it
+automatically. The folder ships empty. Two example plugins live in
+the repo at [`examples/plugins/`](examples/plugins/) as opt-in
+downloads: a minimal "hello world" and a personal-best DPS tracker
+that listens for `fight_end` events and persists across sessions.
+
+Plugins get sandboxed Lua 5.4. They can read your player position,
+DPS, in-combat flag and fight events. They can draw their own
+ImGui window with text, buttons, sliders, checkboxes, color
+pickers, combos and progress bars. They can show centered toast
+notifications and persist per-plugin state to disk. They cannot
+touch game memory, network, the filesystem outside their own
+state, or other plugins' state. A bad plugin only crashes itself,
+the mod keeps running.
+
+Full authoring guide is at
+[`data/plugins/README.md`](data/plugins/README.md) (also included
+inside the zip).
+
 ## Layout
 
 Click the padlock (either on the minimap bezel or in the DPS-meter
@@ -150,13 +202,23 @@ the new player Hero to spawn on the client and locks onto it as
 soon as the allocation comes through, which on slow loads can take
 a bit longer than the loading screen itself.
 
-If the game still crashes after a while with this version, please
-zip the `farever-mod.log` file from your Farever folder and open an
-issue with the file attached. Since 0.5.2 the previous session's
-log is kept as `farever-mod.log.1` after a restart, so you can grab
-both files even if you reproduce the crash and relaunch before
-uploading. The log records what the mod was doing at the moment of
-the crash and is the fastest way to narrow the cause.
+If the overlay never appears at all on v0.5.3, check
+`farever-mod.log` for `all composition swap chain variants failed`.
+That is the AMD MPO interaction, and v0.5.2.3 onwards drops three
+auto-repair files into your Farever folder when this happens:
+`farever-fix-amd-overlay.reg` (double-click, accept the prompt,
+reboot), `farever-undo-amd-overlay-fix.reg` (rollback), and
+`OVERLAY_NOT_WORKING.txt` (plain-English step-by-step). If the .reg
+trick does not bring it up either, switch to the v0.4.15 legacy
+build linked above.
+
+If the game crashes after a while, please zip the `farever-mod.log`
+file from your Farever folder and open an issue with it attached.
+Since 0.5.2 the previous session's log is kept as
+`farever-mod.log.1` after a restart, so you can grab both files
+even if you reproduce the crash and relaunch before uploading. The
+log records what the mod was doing at the moment of the crash and
+is the fastest way to narrow the cause.
 
 ## Compatibility notes
 
@@ -169,13 +231,13 @@ the crash and is the fastest way to narrow the cause.
   built-in FPS counter instead, which is much more compatible with
   composition overlays.
 
-* **FPS is capped to your monitor refresh rate while the overlay
-  is active.** Side-effect of how DirectComposition mounts on the
-  game window: it pulls the game out of independent-flip
-  presentation into DWM-composed presentation, which syncs to the
-  display refresh. For most players this matches what vsync would
-  do anyway (60 Hz = 60 FPS, 144 Hz = 144 FPS, etc). If you want
-  uncapped FPS for input latency, toggle the mod off with F7.
+* **Native-resolution exclusive fullscreen bypasses the overlay.**
+  Side-effect of how DWM presents to the display: in exclusive
+  fullscreen the game's swap chain flips straight to the GPU
+  scanout and DWM is not in the loop, so our composition layer is
+  invisible. Use borderless windowed instead. Most monitor + GPU
+  combos run borderless at essentially the same framerate as
+  exclusive these days.
 
 * **Holding ALT plus left mouse button on an overlay window can
   trigger auto-attack when ALT is released**
@@ -194,77 +256,46 @@ the crash and is the fastest way to narrow the cause.
   "UI scale (text)" slider, 2.0x to 2.5x is usually right for
   a 48 inch 4K display.
 
-* **Overlay does not show up on some older GPU driver builds.** If
-  the mod loads but no overlay appears, check `farever-mod.log` for
-  `CreateSwapChainForComposition` failures. The 0.5.2.1 fallback
-  path tries three driver-friendly variants, but very old Win10
-  builds (pre-1809) may reject all of them. Updating the GPU
-  driver usually fixes it.
+## What's new in 0.5.3
 
-## What's new in 0.5.2.2
+Three things on top of 0.5.2.3:
 
-Two small things on top of 0.5.2.1:
+* **Lua plugin system**. Drop `.lua` files into `data/plugins/`,
+  the mod loads them sandboxed with hot reload. Plugin hooks:
+  `on_init`, `on_render` (in an ImGui window the mod opens), and
+  `on_event(name, data)` for `hero_locked`, `fight_start`,
+  `damage_dealt`, `fight_end`. Read APIs for player position and
+  DPS, ImGui widget bindings, persistent per-plugin store, toast
+  notifications. Lua 5.4 statically linked, about 300 KB added to
+  the DLL. Full authoring guide at
+  [`data/plugins/README.md`](data/plugins/README.md).
 
-* **Right-click on the minimap registers again**
-  ([#23](https://github.com/ramisotti13-eng/farever-minimap/issues/23)).
-  In 0.5.2 / 0.5.2.1 right-clicking a chest or red-orb marker on
-  the minimap to mark it collected silently did nothing. The
-  recently added RMB auto-clickthrough (which makes camera-rotate
-  ignore the overlay) was eating the right-click before the
-  collectible toggle saw it. Now the auto-clickthrough only kicks
-  in when RMB starts outside the minimap window, so toggling
-  collectibles and the bezel reposition drag both work normally
-  again.
+* **FPS fix for ultrawide and high-resolution overlays**
+  ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)).
+  Several users on 3440x1440 / 4070 Super class hardware reported
+  the game FPS dropping in half while the overlay was visible.
+  Root cause was DWM re-compositing a full-game-window DCOMP layer
+  on every game-Present. Fixed by computing a tight dirty rect from
+  the ImGui draw commands each frame and passing it to
+  `IDXGISwapChain1::Present1`, so DWM only re-composites the small
+  region where the UI actually lives instead of the full 20 MB
+  transparent buffer.
 
-* **Standalone Loot tracker window**. The chest and red orb counts
-  used to live only inside the filter tablet, where they were easy
-  to miss. New small draggable window labelled "Loot" with a row
-  per kind (gold square for chests, red circle for orbs), the
-  done / total numbers, and a thin progress bar under each row.
-  Turns green when a category hits 100%. Default visible, toggle
-  via the funnel button on the minimap bezel and the "Show loot
-  counter" checkbox in the filter tablet. Snaps back to its default
-  position with the Home reset-positions hotkey.
-
-## What's new in 0.5.2.1
-
-Small patch release on top of 0.5.2, two user-visible fixes plus a
-diagnostic improvement:
-
-* **UI text scale slider**
-  ([#22](https://github.com/ramisotti13-eng/farever-minimap/issues/22)).
-  EpicTragedy reported that on a 48 inch 4K monitor the overlay text
-  and icons are too small to read. Added a "UI scale (text)" slider
-  to the filter tablet (the bezel funnel button). Range 0.50x to
-  2.50x, default 1.00x, persisted across sessions in
-  `ui_state.json`. Hand-drawn bezel icons keep their pixel size by
-  design, this only scales rendered text (DPS table, Hotkeys panel,
-  Fight Detail, tooltips). 2.0x or 2.5x is the right ballpark for
-  4K + large display.
-
-* **DXGI composition swap chain fallback**
-  ([#20](https://github.com/ramisotti13-eng/farever-minimap/issues/20),
-  [#21](https://github.com/ramisotti13-eng/farever-minimap/issues/21)).
-  Two users hit `CreateSwapChainForComposition` failing with
-  `0x887A0001` (DXGI_ERROR_INVALID_CALL) on game launch, so the
-  overlay never came up even though the game itself ran fine.
-  Composition swap chains have stricter format / swap-effect
-  requirements than regular DX12 swap chains and some older GPU
-  drivers reject specific combos. 0.5.2.1 tries three descriptor
-  variants in sequence (BGRA + flip-discard, RGBA + flip-discard,
-  BGRA + flip-sequential), the first one the driver accepts wins.
-  If all three fail the log says so clearly so the issue is at least
-  visible.
-
-* **Adapter info logged at startup**. `farever-mod.log` now records
-  the GPU name, vendor / device IDs, and VRAM at the moment the
-  overlay's D3D12 device is created. Makes "overlay does not show
-  up" issues much faster to diagnose because the GPU + driver combo
-  is right there in the log.
+* **HWND re-validation**
+  ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29),
+  [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)).
+  Two AMD users hit a state where the overlay never came up because
+  the game destroyed and recreated its top-level window during the
+  hero-lock wait, and the mod was still pointing at the cached
+  boot-time HWND. v0.5.3 now validates `IsWindow` + a plausibility-
+  bounded `GetClientRect` before DCOMP setup, and re-enumerates the
+  game window with retries when the cached handle is stale.
 
 ## Changelog
 
-See the [Releases page](../../releases) for the full version history (0.1 through 0.5.2.1). Highlights of recent versions are kept in this README; everything older lives in the per-release notes.
+See the [Releases page](../../releases) for the full version
+history (0.1 through 0.5.3). Highlights of recent versions are kept
+in this README; everything older lives in the per-release notes.
 
 ## Notes
 
