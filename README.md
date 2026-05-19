@@ -256,6 +256,35 @@ is the fastest way to narrow the cause.
   "UI scale (text)" slider, 2.0x to 2.5x is usually right for
   a 48 inch 4K display.
 
+## What's new in 0.5.3.1
+
+A minor release on top of 0.5.3 with no user-visible changes outside the plugin runtime. The mod itself looks and behaves identically. What changed is what plugin authors can read from the game.
+
+* **Full Hero attribute surface for plugins**. The Hero exposed only
+  position, heading, lock state and the in-combat flag in v0.5.3.
+  v0.5.3.1 follows the `Hero.attr` pointer chase and surfaces ~50
+  more fields via `farever.player.*`: HP / max HP / energy / shield,
+  primary stats (vitality / strength / dexterity / faith / intellect),
+  crit / penetration / fervor / dodge / cooldown reduction, armor /
+  magic armor / magic reduction, move speed, damage / heal modifiers,
+  and the Hero-only class resources (rage / spark / focus / combo
+  point / poise / oxygen / glide). Two batched memory reads per frame
+  populate one snapshot; the API stays a simple `farever.player.X()`
+  getter set.
+
+* **Mob and boss tracker** via `farever.foes.*`. New `foe_state`
+  module hooks `ent.Foe` allocations and maintains a bounded
+  32-entry list, sorted nearest-first. `farever.foes.list()`,
+  `target()`, `nearest()` and `count()` give plugins access to each
+  foe's position, HP, level, shield, in-combat flag and a flag for
+  whether the player is currently targeting it. Same render-thread
+  validation pattern as the Hero watcher (type tag, pointer userland,
+  NaN guard, three-frame stale prune). This is the surface that
+  unlocks boss cast-bar HUDs, mechanic warners and threat displays.
+
+Plugin authoring guide at
+[`data/plugins/README.md`](data/plugins/README.md).
+
 ## What's new in 0.5.3
 
 Three things on top of 0.5.2.3:
