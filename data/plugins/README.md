@@ -5,9 +5,11 @@ the mod loads it automatically the next time it sees the file
 (actually it picks up changes about once a second, so if you have the
 game running you do not need to restart).
 
-A plugin is one `.lua` file. Two of them ship with the mod as
-examples: `hello_world.lua` and `personal_best.lua`. Open them in
-your editor and you have a working starting point.
+A plugin is one `.lua` file. The mod does not ship any by default,
+the folder starts empty. Two example plugins live in the repo at
+[`examples/plugins/`](https://github.com/ramisotti13-eng/farever-minimap/tree/main/examples/plugins).
+Download either one, drop it in here, you have a working starting
+point.
 
 If your plugin breaks, the mod does not. The Lua state is sandboxed
 and every call into it goes through `pcall`, so an error in your
@@ -218,14 +220,21 @@ You cannot do these things from a plugin. This is on purpose:
 If you find a real-world use case that needs one of these, open an
 issue. We can probably expose a safe wrapper for it.
 
-## What ships out of the box
+## Example plugins (optional download)
 
-- `hello_world.lua` shows the basics: render, button, log, event.
-- `personal_best.lua` is the most complete example. It listens for
-  `fight_end`, tracks your best DPS across sessions in the store,
-  and fires a toast when you set a new record.
+The mod ships empty. Two examples live in the repo for you to grab
+if you want a starting point:
 
-Copy either one and modify. That is the fastest way to start.
+[`examples/plugins/hello_world.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/hello_world.lua)
+shows the basics: render, button, log, event.
+
+[`examples/plugins/personal_best.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/personal_best.lua)
+is the most complete example. It listens for `fight_end`, tracks your
+best DPS across sessions in the store, and fires a toast when you set
+a new record.
+
+Save either one into this folder, restart the game (or just wait a
+second for hot reload), and it shows up in the Plugin Manager.
 
 ## When things break
 
