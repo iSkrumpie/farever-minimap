@@ -1,0 +1,6 @@
+# Plugin examples and user-generated stores are intentionally NOT
+# published to the public repo. Only the plugin authoring README
+# is committed under data/plugins/. The .lua sources for
+# hello_world / personal_best ship in the release zip, not here.
+data/plugins/*.lua
+data/plugins/*.store.lua
