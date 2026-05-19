@@ -60,21 +60,41 @@ end
 ## What you can read
 
 ```lua
-farever.player.x()         -- world X
-farever.player.y()         -- world Y
-farever.player.z()         -- world Z
-farever.player.rot_z()     -- heading in radians
-farever.player.locked()    -- true once the mod has identified you
-farever.player.in_combat() -- the game's in-combat flag
+-- Position and orientation
+farever.player.x()             -- world X
+farever.player.y()             -- world Y
+farever.player.z()             -- world Z
+farever.player.rot_z()         -- heading in radians
+farever.player.locked()        -- true once the mod has identified you
 
-farever.dps.current()      -- current pull's DPS (float)
-farever.dps.total()        -- current pull's total damage
-farever.dps.elapsed()      -- seconds since the pull started
-farever.dps.in_combat()    -- true while the pull is still active
+-- Combat state
+farever.player.in_combat()     -- the game's in-combat flag
+farever.player.combat_start()  -- game-time when combat began
+
+-- Health and resources
+farever.player.health()        -- current HP
+farever.player.max_health()    -- max HP
+farever.player.health_pct()    -- health / max_health, 0.0 .. 1.0
+farever.player.health_regen()  -- regen rate
+farever.player.shield()        -- shield value
+farever.player.energy()        -- special energy pool
+
+-- Defense and progression
+farever.player.armor()         -- physical armor
+farever.player.magic_armor()   -- magic armor
+farever.player.level()         -- character level
+
+-- DPS meter snapshot
+farever.dps.current()          -- current pull's DPS (float)
+farever.dps.total()            -- current pull's total damage
+farever.dps.elapsed()          -- seconds since the pull started
+farever.dps.in_combat()        -- true while the pull is still active
 ```
 
 All of these are functions you call. They return the value at the
-moment you ask. They never block.
+moment you ask. They never block. If the mod has not identified your
+character yet (`locked()` returns false) the resource and defense
+readers return 0 so plugin code can use them unconditionally.
 
 ## Events
 
