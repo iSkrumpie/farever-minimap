@@ -9,6 +9,7 @@ add_library(farever_mod SHARED
     damage.cpp
     aggregator.cpp
     hero_state.cpp
+    target_state.cpp
     textures.cpp
     pois.cpp
     poi_progress.cpp
@@ -30,6 +31,7 @@ target_link_libraries(farever_mod PRIVATE
     dxgi
     d3dcompiler
     dcomp
+    winmm
 )
 
 target_compile_definitions(farever_mod PRIVATE

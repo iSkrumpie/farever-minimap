@@ -16,6 +16,7 @@
 #include "hl_hook.h"
 #include "damage.h"
 #include "hero_state.h"
+#include "target_state.h"
 #include "skill_resolve.h"
 #include "entity_state.h"
 #include "d3d12_hook.h"
@@ -67,6 +68,7 @@ DWORD WINAPI worker_thread(LPVOID) {
     // must happen BEFORE hl_hook_install so we don't miss the first
     // burst of allocations on the way out of probe_init.
     fv::skill_resolve_init(g_libhl);
+    fv::target_state_init(g_libhl);
     fv::damage_start(g_libhl);
     fv::hero_state_start();
 

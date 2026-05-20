@@ -13,6 +13,7 @@
 #include "plugins.h"
 #include "log.h"
 #include "hero_state.h"
+#include "target_state.h"
 #include "aggregator.h"
 
 extern "C" {
@@ -24,6 +25,7 @@ extern "C" {
 #include "imgui.h"
 
 #include <windows.h>
+#include <mmsystem.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -67,13 +69,16 @@ struct Plugin {
 };
 
 struct PluginEvent {
-    enum class Kind { HeroLocked, DamageDealt, FightStart, FightEnd };
+    enum class Kind { HeroLocked, DamageDealt, FightStart, FightEnd,
+                      TargetChanged, CastStart, CastEnd };
     Kind        k = Kind::HeroLocked;
     std::string skill;
     std::string top_skill;
+    std::string target_kind;
     double      amount   = 0.0;
     double      duration = 0.0;
     double      dps      = 0.0;
+    double      total_sec = 0.0;
     int         fight_id = 0;
     bool        is_crit  = false;
     bool        is_kill  = false;
@@ -303,6 +308,116 @@ int api_player_has_target(lua_State* L) {
 // tracking will return in a later release once the read path is
 // rebuilt in isolation. Plugin authors who started using the API will
 // see it as nil and should branch accordingly.
+
+// farever.target.* — Slice 1: existence + kind id only.
+// Hero.target chased once per ~4 frames on the render thread by
+// target_state_tick; this just reads the published snapshot.
+int api_target_exists(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushboolean(L, t.exists ? 1 : 0);
+    return 1;
+}
+int api_target_name(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    if (t.exists) lua_pushlstring(L, t.kind.data(), t.kind.size());
+    else          lua_pushstring(L, "");
+    return 1;
+}
+int api_target_x(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, t.exists ? t.x : 0.0);
+    return 1;
+}
+int api_target_y(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, t.exists ? t.y : 0.0);
+    return 1;
+}
+int api_target_z(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, t.exists ? t.z : 0.0);
+    return 1;
+}
+int api_target_level(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushinteger(L, t.exists ? t.level : 0);
+    return 1;
+}
+int api_target_hp(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.attr_ok) ? t.health : 0.0);
+    return 1;
+}
+int api_target_max_hp(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.attr_ok) ? t.max_health : 0.0);
+    return 1;
+}
+int api_target_hp_pct(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    double pct = 0.0;
+    if (t.exists && t.attr_ok && t.max_health > 0.0) {
+        pct = t.health / t.max_health;
+    }
+    lua_pushnumber(L, pct);
+    return 1;
+}
+
+// Slice 3: cast bar.
+int api_target_is_casting(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushboolean(L, (t.exists && t.is_casting) ? 1 : 0);
+    return 1;
+}
+int api_target_cast_skill(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    if (t.exists && t.is_casting) {
+        lua_pushlstring(L, t.cast_skill.data(), t.cast_skill.size());
+    } else {
+        lua_pushstring(L, "");
+    }
+    return 1;
+}
+int api_target_cast_progress(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.is_casting) ? t.cast_progress : 0.0);
+    return 1;
+}
+int api_target_cast_total_sec(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.is_casting) ? t.cast_total_sec : 0.0);
+    return 1;
+}
+int api_target_cast_remaining_sec(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.is_casting) ? t.cast_remaining_sec : 0.0);
+    return 1;
+}
+int api_target_cast_elapsed_sec(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.is_casting) ? t.cast_elapsed_sec : 0.0);
+    return 1;
+}
+
+// farever.sound(name) — play a short system sound for plugin alerts
+// (boss-cast warnings etc.). Built-in names map to the Windows
+// system event sounds so we don't ship audio files. Names accepted:
+//   "alert"   -> SystemAsterisk    (sharp ping)
+//   "warning" -> SystemExclamation (lower ping)
+//   "info"    -> SystemNotification
+//   "beep"    -> simple beep
+int api_sound(lua_State* L) {
+    const char* name = luaL_optstring(L, 1, "alert");
+    LPCWSTR alias = L"SystemAsterisk";
+    if      (std::strcmp(name, "warning") == 0) alias = L"SystemExclamation";
+    else if (std::strcmp(name, "info")    == 0) alias = L"SystemNotification";
+    else if (std::strcmp(name, "beep")    == 0) {
+        MessageBeep(MB_OK);
+        return 0;
+    }
+    PlaySoundW(alias, nullptr, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
+    return 0;
+}
 
 int api_dps_current(lua_State* L) {
     AggSnapshot s = aggregator_snapshot();
@@ -750,6 +865,30 @@ void install_api(lua_State* L) {
     // farever.foes table was here in v0.5.3.1. Removed in v0.5.3.2;
     // see the comment by the (deleted) bindings above.
 
+    lua_newtable(L);  // farever.target  (Slice 3: + cast bar)
+    lua_pushcfunction(L, api_target_exists);  lua_setfield(L, -2, "exists");
+    lua_pushcfunction(L, api_target_name);    lua_setfield(L, -2, "name");
+    lua_pushcfunction(L, api_target_x);       lua_setfield(L, -2, "x");
+    lua_pushcfunction(L, api_target_y);       lua_setfield(L, -2, "y");
+    lua_pushcfunction(L, api_target_z);       lua_setfield(L, -2, "z");
+    lua_pushcfunction(L, api_target_level);   lua_setfield(L, -2, "level");
+    lua_pushcfunction(L, api_target_hp);      lua_setfield(L, -2, "hp");
+    lua_pushcfunction(L, api_target_max_hp);  lua_setfield(L, -2, "max_hp");
+    lua_pushcfunction(L, api_target_hp_pct);  lua_setfield(L, -2, "hp_pct");
+    lua_pushcfunction(L, api_target_is_casting);
+    lua_setfield(L, -2, "is_casting");
+    lua_pushcfunction(L, api_target_cast_skill);
+    lua_setfield(L, -2, "cast_skill");
+    lua_pushcfunction(L, api_target_cast_progress);
+    lua_setfield(L, -2, "cast_progress");
+    lua_pushcfunction(L, api_target_cast_total_sec);
+    lua_setfield(L, -2, "cast_total_sec");
+    lua_pushcfunction(L, api_target_cast_remaining_sec);
+    lua_setfield(L, -2, "cast_remaining_sec");
+    lua_pushcfunction(L, api_target_cast_elapsed_sec);
+    lua_setfield(L, -2, "cast_elapsed_sec");
+    lua_setfield(L, -2, "target");
+
     lua_newtable(L);  // farever.log
     lua_pushcfunction(L, api_log_info); lua_setfield(L, -2, "info");
     lua_pushcfunction(L, api_log_info); lua_setfield(L, -2, "warn");
@@ -761,6 +900,7 @@ void install_api(lua_State* L) {
     lua_setfield(L, -2, "store");
 
     lua_pushcfunction(L, api_toast); lua_setfield(L, -2, "toast");
+    lua_pushcfunction(L, api_sound); lua_setfield(L, -2, "sound");
 
     lua_setglobal(L, "farever");
 
@@ -919,15 +1059,34 @@ void push_event_table(lua_State* L, const PluginEvent& ev) {
             lua_pushnumber(L, ev.dps);               lua_setfield(L, -2, "dps");
             lua_pushstring(L, ev.top_skill.c_str()); lua_setfield(L, -2, "top_skill");
             break;
+        case PluginEvent::Kind::TargetChanged:
+            lua_pushstring(L, ev.target_kind.c_str());
+            lua_setfield(L, -2, "kind");
+            break;
+        case PluginEvent::Kind::CastStart:
+            lua_pushstring(L, ev.skill.c_str());
+            lua_setfield(L, -2, "skill");
+            lua_pushnumber(L, ev.total_sec);
+            lua_setfield(L, -2, "total_sec");
+            break;
+        case PluginEvent::Kind::CastEnd:
+            lua_pushstring(L, ev.skill.c_str());
+            lua_setfield(L, -2, "skill");
+            lua_pushnumber(L, ev.duration);
+            lua_setfield(L, -2, "duration");
+            break;
     }
 }
 
 const char* event_name(PluginEvent::Kind k) {
     switch (k) {
-        case PluginEvent::Kind::HeroLocked:  return "hero_locked";
-        case PluginEvent::Kind::DamageDealt: return "damage_dealt";
-        case PluginEvent::Kind::FightStart:  return "fight_start";
-        case PluginEvent::Kind::FightEnd:    return "fight_end";
+        case PluginEvent::Kind::HeroLocked:    return "hero_locked";
+        case PluginEvent::Kind::DamageDealt:   return "damage_dealt";
+        case PluginEvent::Kind::FightStart:    return "fight_start";
+        case PluginEvent::Kind::FightEnd:      return "fight_end";
+        case PluginEvent::Kind::TargetChanged: return "target_changed";
+        case PluginEvent::Kind::CastStart:     return "cast_start";
+        case PluginEvent::Kind::CastEnd:       return "cast_end";
     }
     return "?";
 }
@@ -1132,6 +1291,29 @@ void plugins_emit_fight_end(int fight_id, double duration_s,
     ev.amount    = total_damage;
     ev.dps       = dps;
     ev.top_skill = top_skill ? top_skill : "";
+    enqueue_event(std::move(ev));
+}
+
+void plugins_emit_target_changed(const char* kind) {
+    PluginEvent ev;
+    ev.k           = PluginEvent::Kind::TargetChanged;
+    ev.target_kind = kind ? kind : "";
+    enqueue_event(std::move(ev));
+}
+
+void plugins_emit_cast_start(const char* skill, double total_sec) {
+    PluginEvent ev;
+    ev.k         = PluginEvent::Kind::CastStart;
+    ev.skill     = skill ? skill : "";
+    ev.total_sec = total_sec;
+    enqueue_event(std::move(ev));
+}
+
+void plugins_emit_cast_end(const char* skill, double duration_sec) {
+    PluginEvent ev;
+    ev.k        = PluginEvent::Kind::CastEnd;
+    ev.skill    = skill ? skill : "";
+    ev.duration = duration_sec;
     enqueue_event(std::move(ev));
 }
 

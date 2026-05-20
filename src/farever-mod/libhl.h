@@ -44,6 +44,14 @@ struct LibHL {
     void* hl_dyn_getd = nullptr;
     void* hl_hash_utf8 = nullptr;
 
+    // hxbit replicated entities are referenced by 32-bit UIDs (e.g.
+    // ent.Hero.autoTarget). NetworkSerializer.refs is a hl_int64_map
+    // whose values are the Serializable objects. HashLink exports its
+    // int64-map ops as the `hl_hi64*` family (NOT `hl_int64_map_*`).
+    // Signature:
+    //   vdynamic *hl_hi64get(hl_hi64 *m, int64 key);
+    void* hl_hi64get = nullptr;
+
     // Built-in type singletons exported by libhl. We need at least
     //   hlt_bytes, hlt_i32, hlt_dyn
     // to use as result_type when fetching fields.

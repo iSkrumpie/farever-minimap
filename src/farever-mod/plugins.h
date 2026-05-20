@@ -50,6 +50,14 @@ void plugins_emit_fight_end(int fight_id, double duration_s,
                             double total_damage, double dps,
                             const char* top_skill);
 
+// Slice 4: target / cast events emitted by target_state. The render
+// thread calls these on state-change ticks; plugins receive them via
+// on_event("target_changed" / "cast_start" / "cast_end", table).
+void plugins_emit_target_changed(const char* kind);
+void plugins_emit_cast_start(const char* skill,
+                             double total_sec);   // 0 if first sighting
+void plugins_emit_cast_end(const char* skill, double duration_sec);
+
 // Plugin manager UI (ImGui window). Toggle with F8 by default.
 // Drawn from overlay_render when visible.
 void plugins_render_manager();
