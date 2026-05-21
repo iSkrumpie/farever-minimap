@@ -30,24 +30,27 @@ Pick once and stick with it.
 
 * **[v0.5.5](../../releases/latest)** — the main, actively developed
   build. Use this unless your machine cannot run it.
-* **[v0.4.15](../../releases/tag/v0.4.15)** — a frozen legacy build
+* **[v0.4.16](../../releases/tag/v0.4.16)** — a frozen legacy build
   for users where v0.5.x cannot get the overlay up. This mostly hits
   older AMD cards with the MPO bug, very old Windows builds, or
   unusual driver configurations. v0.4.x renders directly into the
   game's swap chain and avoids the DirectComposition path entirely,
-  which dodges that whole class of problem.
+  which dodges that whole class of problem. v0.4.16 is a constant-only
+  refresh of v0.4.15 against game v0.1.5.25921; the feature set is
+  identical to v0.4.15.
 
-| Feature                              | v0.5.5                        | v0.4.15                              |
+| Feature                              | v0.5.5                        | v0.4.16                              |
 | ------------------------------------ | ----------------------------- | ------------------------------------ |
 | Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
 | Loot tracker window                  | Yes                           | No                                   |
 | UI scale slider for 4K monitors      | Yes                           | No                                   |
 | Lua plugin system                    | Yes                           | No                                   |
+| Square minimap option                | Yes                           | No                                   |
 | Composition overlay (DCOMP)          | Yes                           | No, renders on the game's swap chain |
 | Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
 | Known long-session access violation  | No                            | Possible after long AFK DPS farming  |
 
-If v0.5.5 does not bring up the overlay on your machine, try v0.4.15
+If v0.5.5 does not bring up the overlay on your machine, try v0.4.16
 before opening an issue. If neither works, then open the issue and
 attach `farever-mod.log` from your Farever folder.
 
@@ -213,7 +216,7 @@ auto-repair files into your Farever folder when this happens:
 `farever-fix-amd-overlay.reg` (double-click, accept the prompt,
 reboot), `farever-undo-amd-overlay-fix.reg` (rollback), and
 `OVERLAY_NOT_WORKING.txt` (plain-English step-by-step). If the .reg
-trick does not bring it up either, switch to the v0.4.15 legacy
+trick does not bring it up either, switch to the v0.4.16 legacy
 build linked above.
 
 If the game crashes after a while, please zip the `farever-mod.log`
@@ -287,74 +290,9 @@ Single-target only for now. A full multi-foe scanner is still on the roadmap; th
 
 Plugin authoring guide at [`data/plugins/README.md`](data/plugins/README.md) is updated with the new APIs and a complete boss-helper plugin sketch.
 
-## What's new in 0.5.3.2
-
-A bug-fix release. The foe tracker introduced in 0.5.3.1 caused a crash a few seconds after the hero locks on some setups. It is removed in 0.5.3.2 along with the `farever.foes.*` table that depended on it. A new foe tracker will return in a later release once the read path is rebuilt in isolation.
-
-Everything else from 0.5.3.1 stays in:
-
-* **Full Hero attribute surface for plugins**. The Hero exposed only
-  position, heading, lock state and the in-combat flag in v0.5.3.
-  v0.5.3.1 follows the `Hero.attr` pointer chase and surfaces ~50
-  more fields via `farever.player.*`: HP / max HP / energy / shield,
-  primary stats (vitality / strength / dexterity / faith / intellect),
-  crit / penetration / fervor / dodge / cooldown reduction, armor /
-  magic armor / magic reduction, move speed, damage / heal modifiers,
-  and the Hero-only class resources (rage / spark / focus / combo
-  point / poise / oxygen / glide). Two batched memory reads per frame
-  populate one snapshot; the API stays a simple `farever.player.X()`
-  getter set.
-
-Plus a handful of defensive fixes that fell out of a 0.5.3.1 code
-review: HeroAttributes type-tag check before reading the Hero-only
-block, mutex around the snapshot, atomic `farever.store.set` writes
-(no more wiped personal_best on crash), bounded event / toast queues,
-larger `imgui.input_text` buffer, and a `data/no_plugins.flag`
-escape hatch.
-
-Plugin authoring guide at
-[`data/plugins/README.md`](data/plugins/README.md).
-
-## What's new in 0.5.3
-
-Three things on top of 0.5.2.3:
-
-* **Lua plugin system**. Drop `.lua` files into `data/plugins/`,
-  the mod loads them sandboxed with hot reload. Plugin hooks:
-  `on_init`, `on_render` (in an ImGui window the mod opens), and
-  `on_event(name, data)` for `hero_locked`, `fight_start`,
-  `damage_dealt`, `fight_end`. Read APIs for player position and
-  DPS, ImGui widget bindings, persistent per-plugin store, toast
-  notifications. Lua 5.4 statically linked, about 300 KB added to
-  the DLL. Full authoring guide at
-  [`data/plugins/README.md`](data/plugins/README.md).
-
-* **FPS fix for ultrawide and high-resolution overlays**
-  ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)).
-  Several users on 3440x1440 / 4070 Super class hardware reported
-  the game FPS dropping in half while the overlay was visible.
-  Root cause was DWM re-compositing a full-game-window DCOMP layer
-  on every game-Present. Fixed by computing a tight dirty rect from
-  the ImGui draw commands each frame and passing it to
-  `IDXGISwapChain1::Present1`, so DWM only re-composites the small
-  region where the UI actually lives instead of the full 20 MB
-  transparent buffer.
-
-* **HWND re-validation**
-  ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29),
-  [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)).
-  Two AMD users hit a state where the overlay never came up because
-  the game destroyed and recreated its top-level window during the
-  hero-lock wait, and the mod was still pointing at the cached
-  boot-time HWND. v0.5.3 now validates `IsWindow` + a plausibility-
-  bounded `GetClientRect` before DCOMP setup, and re-enumerates the
-  game window with retries when the cached handle is stale.
-
 ## Changelog
 
-See the [Releases page](../../releases) for the full version
-history (0.1 through 0.5.3). Highlights of recent versions are kept
-in this README; everything older lives in the per-release notes.
+The two latest "What's new" sections above cover the most recent user-visible changes. For older versions, the per-release notes on the [Releases page](../../releases) carry the full history (0.1 through 0.5.5), including the 0.5.3 Lua plugin system, the 0.5.3 DCOMP FPS fix for ultrawide / high-resolution setups ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)), the 0.5.3 HWND re-validation for AMD configurations ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29), [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)), the 0.5.3.1 Hero attribute surface for plugins, the 0.5.3.2 foe-tracker crash fix, and earlier compatibility work.
 
 ## Notes
 
