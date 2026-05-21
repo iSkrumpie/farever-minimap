@@ -28,7 +28,7 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
 There are two parallel builds on the [Releases page](../../releases).
 Pick once and stick with it.
 
-* **[v0.5.5](../../releases/latest)** — the main, actively developed
+* **[v0.5.6](../../releases/latest)** — the main, actively developed
   build. Use this unless your machine cannot run it.
 * **[v0.4.16](../../releases/tag/v0.4.16)** — a frozen legacy build
   for users where v0.5.x cannot get the overlay up. This mostly hits
@@ -39,7 +39,7 @@ Pick once and stick with it.
   refresh of v0.4.15 against game v0.1.5.25921; the feature set is
   identical to v0.4.15.
 
-| Feature                              | v0.5.5                        | v0.4.16                              |
+| Feature                              | v0.5.6                        | v0.4.16                              |
 | ------------------------------------ | ----------------------------- | ------------------------------------ |
 | Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
 | Loot tracker window                  | Yes                           | No                                   |
@@ -50,7 +50,7 @@ Pick once and stick with it.
 | Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
 | Known long-session access violation  | No                            | Possible after long AFK DPS farming  |
 
-If v0.5.5 does not bring up the overlay on your machine, try v0.4.16
+If v0.5.6 does not bring up the overlay on your machine, try v0.4.16
 before opening an issue. If neither works, then open the issue and
 attach `farever-mod.log` from your Farever folder.
 
@@ -272,6 +272,40 @@ is the fastest way to narrow the cause.
   "UI scale (text)" slider, 2.0x to 2.5x is usually right for
   a 48 inch 4K display.
 
+* **Alt-tab game crash since the v0.1.5.25921 patch.** Some users
+  hit an access violation in the game's own DX12 renderer
+  (`h3d.impl.DX12Driver.present`) after a long foreground loss
+  followed by returning to the game. Pattern: alt-tab to Discord /
+  browser / Steam overlay for several seconds, come back, the game
+  crashes within a few frames. The mod is not the cause — when this
+  happens the mod's own ticks (`damage`, `hero_state`, `overlay
+  alive`) keep firing cleanly while the game's render thread dies
+  — but on a few setups the timing is reproducible. Workarounds:
+  hide the overlay (default F7) before alt-tabbing, switch to
+  borderless windowed if you are in exclusive fullscreen, or try
+  the opt-in `data/fg_detach.flag` and `data/cursor_park.flag`
+  workarounds documented in the v0.5.6 release notes. Filed
+  upstream as a game-side issue; nothing we can fix from the mod's
+  side directly.
+
+## What's new in 0.5.6
+
+A plugin-author release. Big API surface bump that makes boss-helper, gear-inspector, HUD and navigation-arrow plugins buildable from Lua without further DLL work. If you don't write plugins, the only user-visible change is the **mouse-park** below; everything else is API-only and silent for everyone else.
+
+For plugin authors:
+
+* **Equipment + statuses + weapon read surface**. `farever.player.weapon_kind() / .weapon_level() / .weapon_upgrade()` for the currently-equipped weapon, `farever.player.equipment()` for the full loadout array, `farever.player.statuses()` for the active buffs/debuffs list. Plus a `weapon_changed` event that fires on each swap. Enough for per-weapon personal bests, gear inspectors, build-snapshot tooling.
+* **Target defense getters**. `farever.target.armor() / .magic_armor() / .magic_reduction()`. Currently base-only because the live final values live in a MapData side-channel we don't decode yet, but the slot is reserved.
+* **Animation surface**. `farever.now()` monotonic clock, `imgui.font_scale`, `imgui.cursor_pos`, `imgui.dummy`, and `imgui.draw_rect / draw_rect_filled / draw_circle / draw_circle_filled / draw_line / draw_text / draw_triangle / draw_triangle_filled` for custom HUD pieces (cast bars, telegraph circles, blinking alerts, navigation arrows).
+* **Reference plugins** in [`examples/plugins/`](examples/plugins/): `api_inspector.lua` (living doc of every getter), `damage_planner.lua` (in-game Aragon PvE damage calculator with two-build comparison), `animation_demo.lua` (every draw primitive in one panel), `nav_arrow.lua` (tilting 3D-look waypoint arrow).
+* **Community-plugins folder** at [`community-plugins/`](community-plugins/) for user-submitted Lua plugins, with attribution headers and a submission process. First entry is `poi_height-by-iskrumpie.lua` from [#36](https://github.com/ramisotti13-eng/farever-minimap/issues/36).
+
+The user-visible change:
+
+* **Mouse-park**. When the game has the cursor invisible (camera mode after an ALT toggle) the overlay used to still register hovers from the invisible cursor drifting over its widgets. v0.5.6 overrides ImGui's notion of the mouse to off-screen while the OS cursor is hidden, so widgets stop pretending you're touching them. Active by default, no flag needed. Does not touch the OS cursor itself — the physical cursor keeps moving normally, only the overlay's hover state is suppressed.
+
+Two **opt-in workaround flags** for users hitting the alt-tab game crash (see Compatibility notes below): drop `data/cursor_park.flag` to clip the OS cursor to a 1-pixel box at center while invisible (heavier hand on the cursor, may interact with the game's wndproc), and `data/fg_detach.flag` to auto-detach our DCOMP visual during long foreground losses. Both are off by default; both hot-reload at ~2 Hz so you can toggle them without restarting.
+
 ## What's new in 0.5.5
 
 Compatibility patch for game version v0.1.5.25921 (released 2026-05-21). If you were on v0.5.4 and the overlay stopped showing up after the game patched, this is the fix. The game added two new fields to its `ent.Serializable` base class, which shifted every inherited Hero / Foe / Unit / Chest / BaseSkill field at offset 144 and beyond by 8 bytes. The mod's hero-lock predicate was reading the wrong byte and never matched, so the overlay never came up. All affected offsets were re-anchored against a fresh `hlboot.dat` dump.
@@ -280,7 +314,7 @@ Drop in the new `dinput8.dll` and you are done. `data/plugins/`, plugin store fi
 
 There is also a small new option for everyone, not just plugin authors:
 
-* **Square minimap**. The minimap has always been a disc. v0.5.5 adds a "Square minimap" checkbox in the settings panel (the keys / settings button on the bezel). Off by default keeps the circle, on swaps the mosaic clip, bezel border, POI clipping and bezel-button placement to the inscribed rectangle. The bezel buttons (pin, size cycle, lock, filter, chest, keys, plus, minus, collapse) stay at the angles you customized via right-click-drag, projected onto the square perimeter so the order is preserved. Toggling back to circle restores them to the ring. State persists in `data/ui_state.json`.
+* **Square minimap**. The minimap has always been a disc. v0.5.6 adds a "Square minimap" checkbox in the settings panel (the keys / settings button on the bezel). Off by default keeps the circle, on swaps the mosaic clip, bezel border, POI clipping and bezel-button placement to the inscribed rectangle. The bezel buttons (pin, size cycle, lock, filter, chest, keys, plus, minus, collapse) stay at the angles you customized via right-click-drag, projected onto the square perimeter so the order is preserved. Toggling back to circle restores them to the ring. State persists in `data/ui_state.json`.
 
 Plugin API surface from 0.5.4 (`farever.target.*`, three events, `farever.sound()`) is unchanged.
 
@@ -301,7 +335,7 @@ Plugin authoring guide at [`data/plugins/README.md`](data/plugins/README.md) is 
 
 ## Changelog
 
-The two latest "What's new" sections above cover the most recent user-visible changes. For older versions, the per-release notes on the [Releases page](../../releases) carry the full history (0.1 through 0.5.5), including the 0.5.3 Lua plugin system, the 0.5.3 DCOMP FPS fix for ultrawide / high-resolution setups ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)), the 0.5.3 HWND re-validation for AMD configurations ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29), [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)), the 0.5.3.1 Hero attribute surface for plugins, the 0.5.3.2 foe-tracker crash fix, and earlier compatibility work.
+The latest "What's new" sections above cover the most recent user-visible changes. For older versions, the per-release notes on the [Releases page](../../releases) carry the full history (0.1 through 0.5.6), including the 0.5.3 Lua plugin system, the 0.5.3 DCOMP FPS fix for ultrawide / high-resolution setups ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)), the 0.5.3 HWND re-validation for AMD configurations ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29), [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)), the 0.5.3.1 Hero attribute surface for plugins, the 0.5.3.2 foe-tracker crash fix, and earlier compatibility work.
 
 ## Notes
 

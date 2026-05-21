@@ -331,10 +331,16 @@ imgui.draw_circle_filled(x, y, radius, r, g, b, a)
 imgui.draw_circle(x, y, radius, r, g, b, a, thickness)
 imgui.draw_line(x1, y1, x2, y2, r, g, b, a, thickness)
 imgui.draw_text(x, y, r, g, b, a, "text at this exact screen pos")
+imgui.draw_triangle_filled(x1, y1, x2, y2, x3, y3, r, g, b, a)
+imgui.draw_triangle(x1, y1, x2, y2, x3, y3, r, g, b, a, thickness)
 ```
 
 A worked example with cast-bar, telegraph circle, blinking alert and
 pulsing font size is in [`examples/plugins/animation_demo.lua`](../../examples/plugins/animation_demo.lua).
+[`examples/plugins/nav_arrow.lua`](../../examples/plugins/nav_arrow.lua)
+shows how to compose the math (player heading + world-space delta to a
+target) with `draw_triangle_filled` to build a 3D-looking waypoint
+arrow that tilts up or down as the target rises or drops.
 
 ## Persistent state
 
@@ -489,6 +495,7 @@ plugins for you to grab as starting points:
 - [`api_inspector.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/api_inspector.lua) — living documentation of every read-surface getter. Drop it in to see what your character / target currently exposes.
 - [`damage_planner.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/damage_planner.lua) — in-game version of Aragon's PvE damage calculator, with two-build comparison sliders and per-weapon damage memory.
 - [`animation_demo.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/animation_demo.lua) — showcases the v0.5.6 animation surface (blinking text, pulsing size, custom cast bar, telegraph circle, big-red-alert pattern).
+- [`nav_arrow.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/nav_arrow.lua) — 3D-look navigation arrow that points toward an arbitrary world (x, y, z) waypoint and tilts up / down based on vertical offset. Patterns: world-to-player-local rotation via cos/sin of the heading, atan2 for screen angle and vertical tilt, `draw_triangle_filled` for the arrowhead.
 
 ### Community submissions (`community-plugins/`)
 
