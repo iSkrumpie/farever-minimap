@@ -30,18 +30,20 @@
 namespace farever {
 namespace {
 
-// ent.Hero offsets — same as the structural scanner used.
+// ent.Hero offsets. v0.5.5 (game v0.1.5.25921): ent.Serializable / GameObject
+// added two new fields (sleeping @ 138 + accDt @ 144), pushing every
+// GameObject/Unit/Hero field from offset 144 onwards down by 8 bytes.
 constexpr std::size_t OFF_HERO_OWNERPLAYER  = 16;
-constexpr std::size_t OFF_HERO_POSX         = 144;   // f64
-constexpr std::size_t OFF_HERO_POSY         = 152;
-constexpr std::size_t OFF_HERO_POSZ         = 160;
-constexpr std::size_t OFF_HERO_ROTZ         = 168;
-constexpr std::size_t OFF_HERO_ISINCOMBAT   = 672;   // u8
-constexpr std::size_t OFF_HERO_COMBAT_START = 688;   // f64 (ent.Unit.combatStartTime)
-constexpr std::size_t OFF_HERO_LEVEL        = 976;   // i32 (ent.Unit._level)
-constexpr std::size_t OFF_HERO_ATTR         = 968;   // HOBJ (ent.Unit.attr -> UnitAttributes)
+constexpr std::size_t OFF_HERO_POSX         = 152;   // f64
+constexpr std::size_t OFF_HERO_POSY         = 160;
+constexpr std::size_t OFF_HERO_POSZ         = 168;
+constexpr std::size_t OFF_HERO_ROTZ         = 176;
+constexpr std::size_t OFF_HERO_ISINCOMBAT   = 680;   // u8
+constexpr std::size_t OFF_HERO_COMBAT_START = 696;   // f64 (ent.Unit.combatStartTime)
+constexpr std::size_t OFF_HERO_LEVEL        = 984;   // i32 (ent.Unit._level)
+constexpr std::size_t OFF_HERO_ATTR         = 976;   // HOBJ (ent.Unit.attr -> UnitAttributes)
 
-constexpr std::size_t OFF_HERO_TARGET       = 640;   // i64 (ent.Unit.target)
+constexpr std::size_t OFF_HERO_TARGET       = 648;   // i64 (ent.Unit.target)
 
 // UnitAttributes layout: the f64 block of interest runs from offset
 // 48 (vitality) through offset 328 (heal) — 30 consecutive doubles
@@ -119,8 +121,8 @@ enum HAIdx : int {
     HA_COUNT,
 };
 
-constexpr std::size_t OFF_PLAYER_HERO       = 272;   // Player.hero (back-ref)
-constexpr std::size_t OFF_PLAYER_ISME       = 280;   // u8
+constexpr std::size_t OFF_PLAYER_HERO       = 280;   // Player.hero (back-ref) — v0.5.5 shift
+constexpr std::size_t OFF_PLAYER_ISME       = 288;   // u8                     — v0.5.5 shift
 
 // How many ticks (~ frames) to retry a pending Hero before dropping
 // it. Old value 600 = ~10s; bumped to 6000 (~100s) so dungeon-exit

@@ -33,13 +33,17 @@
 namespace farever {
 namespace {
 
-// ent.Unit / ent.Hero offsets (classes_v014.json v0.14).
+// ent.Unit / ent.Hero offsets (classes_v0152.json game v0.1.5.25921).
+// v0.5.5 game update added sleeping @ 138 + accDt @ 144 in ent.Serializable
+// / GameObject base, shifting every inherited Unit/Hero/GameObject field
+// at offset >= 144 by +8 bytes. Unit.host @ 48 sits above the shift point
+// and is unchanged.
 constexpr std::size_t OFF_UNIT_HOST          = 48;    // HOBJ:hxbit.NetworkHost
-constexpr std::size_t OFF_GAMEOBJECT_POSX    = 144;   // f64 (inherited from ent.GameObject)
-constexpr std::size_t OFF_UNIT_KIND          = 584;   // HOBJ:String
-constexpr std::size_t OFF_UNIT_SKILLS        = 448;   // HOBJ:hl.types.ArrayObj of BaseSkill
-constexpr std::size_t OFF_UNIT_ATTR          = 968;   // HOBJ:UnitAttributes
-constexpr std::size_t OFF_UNIT_LEVEL         = 976;   // i32 (Unit._level)
+constexpr std::size_t OFF_GAMEOBJECT_POSX    = 152;   // f64 (inherited from ent.GameObject)
+constexpr std::size_t OFF_UNIT_KIND          = 592;   // HOBJ:String
+constexpr std::size_t OFF_UNIT_SKILLS        = 456;   // HOBJ:hl.types.ArrayObj of BaseSkill
+constexpr std::size_t OFF_UNIT_ATTR          = 976;   // HOBJ:UnitAttributes
+constexpr std::size_t OFF_UNIT_LEVEL         = 984;   // i32 (Unit._level)
 
 // hl.types.ArrayObj layout: length @8 (i32), inner varray @16.
 constexpr std::size_t OFF_ARRAYOBJ_LENGTH    = 8;
@@ -48,15 +52,17 @@ constexpr std::size_t OFF_ARRAYOBJ_VARRAY    = 16;
 // element data follows inline. Element stride for object arrays is 8.
 constexpr std::size_t OFF_VARRAY_DATA        = 24;
 
-// st.skill.BaseSkill layout we touch (classes_v014.json):
-constexpr std::size_t OFF_BASESKILL_KIND      = 152;   // HOBJ:String
-constexpr std::size_t OFF_BASESKILL_START     = 160;   // HF64 startTime
-constexpr std::size_t OFF_BASESKILL_STOP      = 168;   // HF64 stopTime
-constexpr std::size_t OFF_BASESKILL_DYN1      = 184;   // HF64 dynVal1
-constexpr std::size_t OFF_BASESKILL_DYN2      = 192;   // HF64 dynVal2
-constexpr std::size_t OFF_BASESKILL_DYN3      = 200;   // HF64 dynVal3
-constexpr std::size_t OFF_BASESKILL_EXEC_STEP = 288;   // HOBJ:SkillStep
-constexpr std::size_t OFF_BASESKILL_RUNNING   = 328;   // HOBJ:SkillContext
+// st.skill.BaseSkill layout (classes_v0152.json). BaseSkill also extends
+// ent.Serializable, so it picked up the same +8 shift as GameObject for
+// every field at offset >= 144.
+constexpr std::size_t OFF_BASESKILL_KIND      = 160;   // HOBJ:String
+constexpr std::size_t OFF_BASESKILL_START     = 168;   // HF64 startTime
+constexpr std::size_t OFF_BASESKILL_STOP      = 176;   // HF64 stopTime
+constexpr std::size_t OFF_BASESKILL_DYN1      = 192;   // HF64 dynVal1
+constexpr std::size_t OFF_BASESKILL_DYN2      = 200;   // HF64 dynVal2
+constexpr std::size_t OFF_BASESKILL_DYN3      = 208;   // HF64 dynVal3
+constexpr std::size_t OFF_BASESKILL_EXEC_STEP = 296;   // HOBJ:SkillStep
+constexpr std::size_t OFF_BASESKILL_RUNNING   = 336;   // HOBJ:SkillContext
 
 // st.skill.SkillContext: castProgress @168, hitCount @180,
 // startTime @216, stopTime @224, stopReason @232 (HENUM).
@@ -106,9 +112,9 @@ HlHi64Get g_hi64get = nullptr;
 // foe into `autoTarget` instead. `lockedTarget` is the explicit Tab
 // lock, `target` is the legacy / generic Unit field. We try them in
 // priority order and use the first non-null pointer.
-constexpr std::size_t OFF_HERO_TARGET        = 640;    // HI64
-constexpr std::size_t OFF_HERO_LOCKED_TARGET = 1192;   // HI64
-constexpr std::size_t OFF_HERO_AUTO_TARGET   = 1200;   // HI64
+constexpr std::size_t OFF_HERO_TARGET        = 648;    // HI64 — v0.5.5 shift
+constexpr std::size_t OFF_HERO_LOCKED_TARGET = 1200;   // HI64 — v0.5.5 shift
+constexpr std::size_t OFF_HERO_AUTO_TARGET   = 1208;   // HI64 — v0.5.5 shift
 
 // Haxe String layout: bytes ptr @ 8, length (code units) @ 16.
 constexpr std::size_t OFF_STR_BYTES        = 8;

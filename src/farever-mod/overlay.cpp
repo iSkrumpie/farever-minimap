@@ -391,6 +391,11 @@ std::atomic<bool> g_dps_tracking_paused{false};
 // behaviour. Persisted to ui_state.json.
 float g_minimap_alpha = 1.0f;
 
+// v0.5.5: square minimap option. Default false = circular bezel (legacy).
+// True swaps the mosaic clip + bezel ring + POI clip from a disc to the
+// inscribed square. Bezel buttons keep their ring layout. Persisted.
+std::atomic<bool> g_minimap_square{false};
+
 // v0.5.2: ImGui window background opacity multiplier (DPS, hotkeys,
 // fight detail). 0.30..1.00; 1.00 = unchanged. Persisted alongside
 // minimap_alpha. Compass window has its own opacity above, this is
@@ -695,6 +700,9 @@ void ui_lock_load() {
         s.find("\"loot_counter_visible\": false") == std::string::npos &&
         s.find("\"loot_counter_visible\":false")  == std::string::npos);
 
+    g_minimap_square.store(
+        s.find("\"minimap_square\": true") != std::string::npos ||
+        s.find("\"minimap_square\":true")  != std::string::npos);
 }
 
 void ui_lock_save() {
@@ -721,7 +729,9 @@ void ui_lock_save() {
       << "  \"window_bg_alpha\": " << g_window_bg_alpha << ",\n"
       << "  \"ui_scale\": " << g_ui_scale << ",\n"
       << "  \"loot_counter_visible\": "
-      << (g_loot_counter_visible.load() ? "true" : "false") << "\n"
+      << (g_loot_counter_visible.load() ? "true" : "false") << ",\n"
+      << "  \"minimap_square\": "
+      << (g_minimap_square.load() ? "true" : "false") << "\n"
       << "}\n";
 }
 
@@ -793,11 +803,29 @@ struct BezelButton {
     bool   active;
 };
 
+// Project a polar ray (angle_rad) to a point on the bezel rim. In
+// circular mode the rim is a circle of radius bezel_r. In square mode
+// the rim is the inscribed square (also half-size bezel_r), so we scale
+// the ray out to the square's perimeter. Same input angle => same
+// perimeter slot, which means user-customized button angles stay in
+// the same relative order when toggling the shape.
+ImVec2 bezel_rim_pos(ImVec2 center, float bezel_r, float angle_rad,
+                     bool square) {
+    float cx = cosf(angle_rad), sy = sinf(angle_rad);
+    if (square) {
+        float ax = std::fabs(cx), ay = std::fabs(sy);
+        float m = (ax > ay) ? ax : ay;
+        if (m < 1e-6f) m = 1e-6f;
+        float t = bezel_r / m;
+        return ImVec2(center.x + cx * t, center.y + sy * t);
+    }
+    return ImVec2(center.x + cx * bezel_r, center.y + sy * bezel_r);
+}
+
 BezelButton bezel_hit(const char* id, ImVec2 center, float bezel_r,
-                      float angle_rad, float btn_r) {
+                      float angle_rad, float btn_r, bool square = false) {
     BezelButton b{};
-    b.center = ImVec2(center.x + cosf(angle_rad) * bezel_r,
-                      center.y + sinf(angle_rad) * bezel_r);
+    b.center = bezel_rim_pos(center, bezel_r, angle_rad, square);
     b.radius = btn_r;
     ImGui::SetCursorScreenPos(ImVec2(b.center.x - btn_r, b.center.y - btn_r));
     ImGui::SetNextItemAllowOverlap();
@@ -917,15 +945,18 @@ void render_compass(const HeroSnapshot& h) {
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##compass_body", ImVec2(size, size));
 
-    BezelButton pin      = bezel_hit("##pin",        center, r, g_bezel.pin,      btn_r);
-    BezelButton sizeb    = bezel_hit("##size_cycle", center, r, g_bezel.size,     btn_r);
-    BezelButton collapse = bezel_hit("##collapse",   center, r, g_bezel.collapse, btn_r);
-    BezelButton filter   = bezel_hit("##filter",     center, r, g_bezel.filter,   btn_r);
-    BezelButton lockb    = bezel_hit("##lock",       center, r, g_bezel.lock,     btn_r);
-    BezelButton keys     = bezel_hit("##keys",       center, r, g_bezel.keys,     btn_r);
-    BezelButton chest    = bezel_hit("##chest",      center, r, g_bezel.chest,    btn_r);
-    BezelButton plus     = bezel_hit("##zoom_plus",  center, r, g_bezel.plus,     btn_r);
-    BezelButton minus    = bezel_hit("##zoom_minus", center, r, g_bezel.minus,    btn_r);
+    // v0.5.5: square mode sampled here so bezel buttons + the rim/
+    // image swap below all stay in sync within a single frame.
+    const bool square_bezel = g_minimap_square.load(std::memory_order_acquire);
+    BezelButton pin      = bezel_hit("##pin",        center, r, g_bezel.pin,      btn_r, square_bezel);
+    BezelButton sizeb    = bezel_hit("##size_cycle", center, r, g_bezel.size,     btn_r, square_bezel);
+    BezelButton collapse = bezel_hit("##collapse",   center, r, g_bezel.collapse, btn_r, square_bezel);
+    BezelButton filter   = bezel_hit("##filter",     center, r, g_bezel.filter,   btn_r, square_bezel);
+    BezelButton lockb    = bezel_hit("##lock",       center, r, g_bezel.lock,     btn_r, square_bezel);
+    BezelButton keys     = bezel_hit("##keys",       center, r, g_bezel.keys,     btn_r, square_bezel);
+    BezelButton chest    = bezel_hit("##chest",      center, r, g_bezel.chest,    btn_r, square_bezel);
+    BezelButton plus     = bezel_hit("##zoom_plus",  center, r, g_bezel.plus,     btn_r, square_bezel);
+    BezelButton minus    = bezel_hit("##zoom_minus", center, r, g_bezel.minus,    btn_r, square_bezel);
 
     auto* dl = ImGui::GetWindowDrawList();
     ViewUV view = compute_view_uv(h.x, h.y, h.locked);
@@ -944,16 +975,38 @@ void render_compass(const HeroSnapshot& h) {
     // skip the mosaic image entirely. Bezel + player arrow + buttons
     // still draw so the user can see *something*, just no map content.
     const bool skeleton = g_skeleton_minimap.load(std::memory_order_acquire);
+    // v0.5.5: square minimap shape. Sampled once above as square_bezel
+    // (so bezel-button placement stays in sync); reuse the same value
+    // here for the mosaic clip + bezel border + POI clipping below.
+    const bool square = square_bezel;
     if (!skeleton && g_overlay.mosaic.resource) {
-        dl->AddImageRounded((ImTextureID)g_overlay.mosaic.srv_gpu.ptr,
-                            p_min, p_max, view.uv0, view.uv1,
-                            tint_mosaic, r);
+        if (square) {
+            dl->AddImage((ImTextureID)g_overlay.mosaic.srv_gpu.ptr,
+                         p_min, p_max, view.uv0, view.uv1, tint_mosaic);
+        } else {
+            dl->AddImageRounded((ImTextureID)g_overlay.mosaic.srv_gpu.ptr,
+                                p_min, p_max, view.uv0, view.uv1,
+                                tint_mosaic, r);
+        }
     } else {
-        dl->AddCircleFilled(center, r,
-                            scale_alpha(IM_COL32(20, 22, 30, 255)), 64);
+        if (square) {
+            dl->AddRectFilled(p_min, p_max,
+                              scale_alpha(IM_COL32(20, 22, 30, 255)));
+        } else {
+            dl->AddCircleFilled(center, r,
+                                scale_alpha(IM_COL32(20, 22, 30, 255)), 64);
+        }
     }
-    dl->AddCircle(center, r,        scale_alpha(kColBezel),       96, 3.0f);
-    dl->AddCircle(center, r - 2.0f, scale_alpha(kColBezelShadow), 96, 1.0f);
+    if (square) {
+        dl->AddRect(p_min, p_max,
+                    scale_alpha(kColBezel),       0.0f, 0, 3.0f);
+        dl->AddRect({p_min.x + 2.0f, p_min.y + 2.0f},
+                    {p_max.x - 2.0f, p_max.y - 2.0f},
+                    scale_alpha(kColBezelShadow), 0.0f, 0, 1.0f);
+    } else {
+        dl->AddCircle(center, r,        scale_alpha(kColBezel),       96, 3.0f);
+        dl->AddCircle(center, r - 2.0f, scale_alpha(kColBezelShadow), 96, 1.0f);
+    }
     dl->AddLine({center.x, p_min.y}, {center.x, p_min.y + 10.0f},
                 kColNorth, 2.5f);
 
@@ -981,12 +1034,25 @@ void render_compass(const HeroSnapshot& h) {
         std::vector<ClickCand> click_cands;
         click_cands.reserve(pois.size() / 4);
 
+        // v0.5.5: rectangular POI clip when square minimap is on. Keep
+        // a 4-pixel inset matching the disc's clip_r so markers don't
+        // touch the bezel edge.
+        const float rect_inset = 4.0f;
+        const float rx_lo = p_min.x + rect_inset;
+        const float rx_hi = p_max.x - rect_inset;
+        const float ry_lo = p_min.y + rect_inset;
+        const float ry_hi = p_max.y - rect_inset;
         for (const auto& poi : pois) {
             if (!poi_passes_filter(poi)) continue;
             ImVec2 sp_local = player_to_screen(poi.x, poi.y, view, size);
             ImVec2 sp(p_min.x + sp_local.x, p_min.y + sp_local.y);
-            float ddx = sp.x - center.x, ddy = sp.y - center.y;
-            if (ddx * ddx + ddy * ddy > clip_r2) continue;
+            if (square) {
+                if (sp.x < rx_lo || sp.x > rx_hi ||
+                    sp.y < ry_lo || sp.y > ry_hi) continue;
+            } else {
+                float ddx = sp.x - center.x, ddy = sp.y - center.y;
+                if (ddx * ddx + ddy * ddy > clip_r2) continue;
+            }
 
             // User-marked-done collectibles are dimmed (alpha-tinted)
             // rather than hidden so the user always sees the total
@@ -1304,6 +1370,15 @@ void render_minimap_window() {
         bool plugins_on = plugins_manager_visible();
         if (ImGui::Checkbox("Show plugin manager", &plugins_on)) {
             plugins_manager_toggle();
+        }
+
+        // v0.5.5: square minimap toggle. Off (default) = circular disc,
+        // on = inscribed rectangle. Mosaic + bezel + POI clip switch
+        // together; bezel buttons keep their ring layout either way.
+        bool square_on = g_minimap_square.load();
+        if (ImGui::Checkbox("Square minimap", &square_on)) {
+            g_minimap_square.store(square_on);
+            ui_lock_save();
         }
 
         // Opacity slider (issue #2). Affects mosaic + bezel ring;
