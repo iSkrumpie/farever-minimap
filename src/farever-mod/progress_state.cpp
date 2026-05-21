@@ -28,7 +28,7 @@ namespace farever {
 namespace {
 
 constexpr std::size_t OFF_HERO_OWNERPLAYER  = 16;
-constexpr std::size_t OFF_PLAYER_PROGRESS   = 208;
+constexpr std::size_t OFF_PLAYER_PROGRESS   = 216;   // st.Player.progress — v0.4.16 +8 shift
 constexpr std::size_t OFF_PROGRESS_ACTIVITIES = 112;
 constexpr std::size_t OFF_PROGRESS_ELEMENTS   = 120;
 constexpr std::size_t OFF_PROGRESS_ZONES      = 168;

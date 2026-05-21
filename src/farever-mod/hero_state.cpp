@@ -29,16 +29,19 @@
 namespace farever {
 namespace {
 
-// ent.Hero offsets — same as the structural scanner used.
+// ent.Hero offsets. v0.4.16 (game v0.1.5.25921): ent.Serializable /
+// GameObject added two new fields (sleeping @ 138 + accDt @ 144),
+// pushing every GameObject/Unit/Hero field at offset >= 144 by +8.
+// OFF_HERO_OWNERPLAYER sits above the shift point and stays.
 constexpr std::size_t OFF_HERO_OWNERPLAYER  = 16;
-constexpr std::size_t OFF_HERO_POSX         = 144;   // f64
-constexpr std::size_t OFF_HERO_POSY         = 152;
-constexpr std::size_t OFF_HERO_POSZ         = 160;
-constexpr std::size_t OFF_HERO_ROTZ         = 168;
-constexpr std::size_t OFF_HERO_ISINCOMBAT   = 672;   // u8
+constexpr std::size_t OFF_HERO_POSX         = 152;   // f64
+constexpr std::size_t OFF_HERO_POSY         = 160;
+constexpr std::size_t OFF_HERO_POSZ         = 168;
+constexpr std::size_t OFF_HERO_ROTZ         = 176;
+constexpr std::size_t OFF_HERO_ISINCOMBAT   = 680;   // u8
 
-constexpr std::size_t OFF_PLAYER_HERO       = 272;   // Player.hero (back-ref)
-constexpr std::size_t OFF_PLAYER_ISME       = 280;   // u8
+constexpr std::size_t OFF_PLAYER_HERO       = 280;   // Player.hero (back-ref) — v0.4.16 shift
+constexpr std::size_t OFF_PLAYER_ISME       = 288;   // u8                     — v0.4.16 shift
 
 // How many ticks (~ frames) to retry a pending Hero before dropping
 // it. Old value 600 = ~10s; bumped to 6000 (~100s) so dungeon-exit

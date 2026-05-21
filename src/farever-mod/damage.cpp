@@ -45,7 +45,7 @@ constexpr std::size_t OFF_DR_HITCOUNT     = 88;
 constexpr std::size_t OFF_DR_KILL         = 104;
 constexpr std::size_t OFF_DR_CRITICAL     = 105;
 
-constexpr std::size_t OFF_SKILL_KIND = 152;
+constexpr std::size_t OFF_SKILL_KIND = 160;   // BaseSkill.kind — v0.4.16 +8 shift
 constexpr std::size_t OFF_STR_BYTES  = 8;
 constexpr std::size_t OFF_STR_LEN    = 16;
 

@@ -31,9 +31,9 @@ namespace farever {
 namespace {
 
 constexpr std::size_t OFF_GO_REMOVED        = 8;
-constexpr std::size_t OFF_GO_POSX           = 144;
-constexpr std::size_t OFF_GO_POSY           = 152;
-constexpr std::size_t OFF_INTERACT_STATEID  = 648;
+constexpr std::size_t OFF_GO_POSX           = 152;   // v0.4.16 +8 shift
+constexpr std::size_t OFF_GO_POSY           = 160;   // v0.4.16 +8 shift
+constexpr std::size_t OFF_INTERACT_STATEID  = 656;   // Chest.stateId — v0.4.16 +8 shift
 constexpr std::size_t OFF_STR_BYTES         = 8;
 constexpr std::size_t OFF_STR_LEN           = 16;
 

@@ -22,7 +22,7 @@
 namespace farever {
 namespace {
 
-constexpr std::size_t OFF_BS_INF      = 144;  // BaseSkill.inf
+constexpr std::size_t OFF_BS_INF      = 152;  // BaseSkill.inf — v0.4.16 +8 shift
 constexpr std::size_t OFF_STR_BYTES   = 8;
 constexpr std::size_t OFF_STR_LEN     = 16;
 
