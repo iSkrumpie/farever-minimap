@@ -199,6 +199,29 @@ moment you ask. They never block. If the mod has not identified your
 character yet (`locked()` returns false) the resource and defense
 readers return 0 so plugin code can use them unconditionally.
 
+### POI list (v0.5.6.1+)
+
+`farever.pois()` returns the full POI table the mod loaded at boot
+from `data/pois_<world>.json` (~1082 entries on W1_Siagarta) as a
+Lua array of tables. One snapshot per call, plugin authors filter
+by `kind` themselves.
+
+```lua
+local pois = farever.pois()
+for i, p in ipairs(pois) do
+    -- p.x, p.y, p.z   world coordinates (float)
+    -- p.kind          "chest" / "ore" / "plant" / "red_orb" /
+                       "activity" / "dungeon" / "merchant" / ...
+    -- p.subkind       optional sub-classification, may be empty
+    -- p.name          display label as shown on the minimap
+    -- p.id            stable unique id from the prefab tree
+end
+```
+
+Replaces the pattern of hardcoding POI coordinates in your plugin.
+When the mod loads a different world or the json gets updated, your
+plugin sees the new data on next read with no code change.
+
 > **Foes API note.** v0.5.3.1 shipped a `farever.foes.*` table for
 > tracking *every* mob in range. It was the source of a crash a few
 > seconds after the hero locks, so v0.5.3.2 pulled it out. A full
