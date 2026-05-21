@@ -28,7 +28,7 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
 There are two parallel builds on the [Releases page](../../releases).
 Pick once and stick with it.
 
-* **[v0.5.4](../../releases/latest)** — the main, actively developed
+* **[v0.5.5](../../releases/latest)** — the main, actively developed
   build. Use this unless your machine cannot run it.
 * **[v0.4.15](../../releases/tag/v0.4.15)** — a frozen legacy build
   for users where v0.5.x cannot get the overlay up. This mostly hits
@@ -37,7 +37,7 @@ Pick once and stick with it.
   game's swap chain and avoids the DirectComposition path entirely,
   which dodges that whole class of problem.
 
-| Feature                              | v0.5.4                        | v0.4.15                              |
+| Feature                              | v0.5.5                        | v0.4.15                              |
 | ------------------------------------ | ----------------------------- | ------------------------------------ |
 | Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
 | Loot tracker window                  | Yes                           | No                                   |
@@ -47,7 +47,7 @@ Pick once and stick with it.
 | Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
 | Known long-session access violation  | No                            | Possible after long AFK DPS farming  |
 
-If v0.5.4 does not bring up the overlay on your machine, try v0.4.15
+If v0.5.5 does not bring up the overlay on your machine, try v0.4.15
 before opening an issue. If neither works, then open the issue and
 attach `farever-mod.log` from your Farever folder.
 
@@ -259,6 +259,18 @@ is the fastest way to narrow the cause.
   filter tablet (funnel button on the minimap bezel) and use the
   "UI scale (text)" slider, 2.0x to 2.5x is usually right for
   a 48 inch 4K display.
+
+## What's new in 0.5.5
+
+Compatibility patch for game version v0.1.5.25921 (released 2026-05-21). If you were on v0.5.4 and the overlay stopped showing up after the game patched, this is the fix. The game added two new fields to its `ent.Serializable` base class, which shifted every inherited Hero / Foe / Unit / Chest / BaseSkill field at offset 144 and beyond by 8 bytes. The mod's hero-lock predicate was reading the wrong byte and never matched, so the overlay never came up. All affected offsets were re-anchored against a fresh `hlboot.dat` dump.
+
+Drop in the new `dinput8.dll` and you are done. `data/plugins/`, plugin store files and `ui_state.json` are not touched.
+
+There is also a small new option for everyone, not just plugin authors:
+
+* **Square minimap**. The minimap has always been a disc. v0.5.5 adds a "Square minimap" checkbox in the settings panel (the keys / settings button on the bezel). Off by default keeps the circle, on swaps the mosaic clip, bezel border, POI clipping and bezel-button placement to the inscribed rectangle. The bezel buttons (pin, size cycle, lock, filter, chest, keys, plus, minus, collapse) stay at the angles you customized via right-click-drag, projected onto the square perimeter so the order is preserved. Toggling back to circle restores them to the ring. State persists in `data/ui_state.json`.
+
+Plugin API surface from 0.5.4 (`farever.target.*`, three events, `farever.sound()`) is unchanged.
 
 ## What's new in 0.5.4
 
