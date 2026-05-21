@@ -14,28 +14,77 @@
 --   + Arrow panel toggle (enable/disable via checkbox)
 --   + subkind label — ore/plant rows show the resource type
 --   + hero_locked event clears the lock on zone transitions
+--
+-- v2.1.0 (2026-05-22):
+--   + Manual "collected" tracking — [✓] button on each row
+--   + Ignored/collected POIs hidden from main list
+--   + "Show Collected" toggle reveals a de-ignore section
+--   + Collected set persisted across sessions via farever.store
+--   + Locking a POI then marking it collected clears the lock
 -- ============================================================
 
 -- ── persistent settings ───────────────────────────────────────────────────────
 local radius, show_important, show_activity, show_collect, show_resource
 local show_arrow
+local show_ignored_section
 
 -- ── runtime state (not persisted) ────────────────────────────────────────────
 local selected_id    = nil   -- p.id of the locked POI (nil = AUTO)
 local selected_cache = nil   -- {x,y,z,label} saved when POI goes out of radius
+local ignored_set    = {}    -- set: { [id_str] = true } — persisted as store string
 
-local MAX_ROWS   = 12
-local NAV_W      = 360   -- panel + dummy width; forces window to this content width
+local MAX_ROWS = 12
+local NAV_W    = 360   -- panel + dummy width; forces window to this content width
+
+-- ── ignored-set helpers ───────────────────────────────────────────────────────
+
+local function load_ignored()
+    local s = farever.store.get("ignored_ids", "")
+    local t = {}
+    for id in s:gmatch("[^,]+") do
+        t[id] = true
+    end
+    return t
+end
+
+local function save_ignored()
+    local ids = {}
+    for id in pairs(ignored_set) do
+        table.insert(ids, id)
+    end
+    farever.store.set("ignored_ids", table.concat(ids, ","))
+end
+
+local function ignore_poi(id)
+    ignored_set[tostring(id)] = true
+    save_ignored()
+    -- clear lock if the locked POI is now ignored
+    if selected_id and tostring(selected_id) == tostring(id) then
+        selected_id    = nil
+        selected_cache = nil
+    end
+end
+
+local function unignore_poi(id)
+    ignored_set[tostring(id)] = nil
+    save_ignored()
+end
+
+local function is_ignored(id)
+    return ignored_set[tostring(id)] == true
+end
 
 -- ── lifecycle ─────────────────────────────────────────────────────────────────
 
 function on_init()
-    radius         = farever.store.get("radius",          150)
-    show_important = farever.store.get("show_important",   true)
-    show_activity  = farever.store.get("show_activity",    true)
-    show_collect   = farever.store.get("show_collect",     true)
-    show_resource  = farever.store.get("show_resource",    false)
-    show_arrow     = farever.store.get("show_arrow",       true)
+    radius                = farever.store.get("radius",          150)
+    show_important        = farever.store.get("show_important",   true)
+    show_activity         = farever.store.get("show_activity",    true)
+    show_collect          = farever.store.get("show_collect",     true)
+    show_resource         = farever.store.get("show_resource",    false)
+    show_arrow            = farever.store.get("show_arrow",       true)
+    show_ignored_section  = farever.store.get("show_ignored",     false)
+    ignored_set           = load_ignored()
     -- reset lock on every reload (zone change / hot-reload)
     selected_id    = nil
     selected_cache = nil
@@ -222,10 +271,9 @@ function on_render()
         return
     end
 
-    local px        = farever.player.x()
-    local py        = farever.player.y()
-    local pz        = farever.player.z()
-
+    local px = farever.player.x()
+    local py = farever.player.y()
+    local pz = farever.player.z()
 
     -- ── settings controls ─────────────────────────────────────────────────
     local nv, ch
@@ -259,8 +307,9 @@ function on_render()
         return
     end
 
-    local r2     = radius * radius
-    local nearby = {}
+    local r2           = radius * radius
+    local nearby       = {}   -- visible, not ignored
+    local nearby_ign   = {}   -- within radius but ignored (for "Show Collected")
 
     for _, p in ipairs(pois) do
         local cat  = get_category(p.kind)
@@ -275,7 +324,7 @@ function on_render()
             if d2 <= r2 then
                 local xyd = math.sqrt(d2)
                 local dz  = p.z - pz
-                table.insert(nearby, {
+                local entry = {
                     id    = p.id,
                     x     = p.x,
                     y     = p.y,
@@ -284,18 +333,25 @@ function on_render()
                     xyd   = xyd,
                     label = kind_label(p.kind, p.subkind, p.name),
                     kind  = p.kind,
-                })
+                }
+                if is_ignored(p.id) then
+                    table.insert(nearby_ign, entry)
+                else
+                    table.insert(nearby, entry)
+                end
             end
         end
     end
 
     -- sort: same-level first, then by XY distance
-    table.sort(nearby, function(a, b)
+    local function sort_fn(a, b)
         local al = math.abs(a.dz) < 3
         local bl = math.abs(b.dz) < 3
         if al ~= bl then return al end
         return a.xyd < b.xyd
-    end)
+    end
+    table.sort(nearby,     sort_fn)
+    table.sort(nearby_ign, sort_fn)
 
     -- ── determine arrow target ────────────────────────────────────────────
     local arrow_target = nil
@@ -303,18 +359,15 @@ function on_render()
     local out_of_range = false
 
     if selected_id then
-        -- Try to find it in the current visible list
         for _, p in ipairs(nearby) do
             if p.id == selected_id then
                 arrow_target = p
                 is_locked    = true
-                -- keep the cache fresh so we survive radius shrink
                 selected_cache = { x=p.x, y=p.y, z=p.z, label=p.label }
                 break
             end
         end
 
-        -- Not in range: fall back to cached world coords
         if not arrow_target and selected_cache then
             local cdx = selected_cache.x - px
             local cdy = selected_cache.y - py
@@ -333,7 +386,7 @@ function on_render()
         end
     end
 
-    -- AUTO: nearest POI in the visible list
+    -- AUTO: nearest POI in the visible (non-ignored) list
     if not arrow_target and #nearby > 0 then
         arrow_target = nearby[1]
     end
@@ -344,11 +397,10 @@ function on_render()
     end
 
     -- ── POI list ──────────────────────────────────────────────────────────
-    if #nearby == 0 then
+    if #nearby == 0 and #nearby_ign == 0 then
         imgui.text_colored(0.6, 0.6, 0.6, 1.0, "No POIs within radius.")
         imgui.text_colored(0.5, 0.5, 0.5, 1.0,
             string.format("(%d POIs loaded)", #pois))
-        -- still allow clearing the lock
         imgui.separator()
         if selected_id then
             if imgui.button("Clear lock") then
@@ -362,7 +414,7 @@ function on_render()
     end
 
     -- column header
-    imgui.text(string.format("    %-24s  %6s  %7s",
+    imgui.text(string.format("    %-22s  %6s  %6s  ",
         "POI", "XY (m)", "Δz (m)"))
     imgui.separator()
 
@@ -376,30 +428,86 @@ function on_render()
 
         local is_sel = (p.id == selected_id)
 
-        -- Row select button (index label = always unique)
+        -- Row select button
         if imgui.button(tostring(i) .. ".") then
             if is_sel then
-                -- deselect → back to AUTO
                 selected_id    = nil
                 selected_cache = nil
             else
-                -- lock onto this POI
                 selected_id    = p.id
                 selected_cache = { x=p.x, y=p.y, z=p.z, label=p.label }
             end
         end
         imgui.same_line()
 
-        -- Row text: ► for selected, ▲/▼/● for others
-        local prefix        = is_sel and "►" or dz_arrow(p.dz)
+        -- Row text
+        local prefix  = is_sel and "►" or dz_arrow(p.dz)
         local cr, cg, cb = dz_rgb(p.dz)
-        local ca = is_sel and 1.0 or 0.92   -- selected row slightly brighter
+        local ca = is_sel and 1.0 or 0.92
 
-        local line = string.format("%s %-24s %5.0fm %+7.1fm",
-            prefix, p.label:sub(1, 24), p.xyd, p.dz)
+        local line = string.format("%s %-22s %5.0fm %+6.1fm",
+            prefix, p.label:sub(1, 22), p.xyd, p.dz)
         imgui.text_colored(cr, cg, cb, ca, line)
+        imgui.same_line()
+
+        -- [v] ignore button (ASCII — font has no checkmark glyph)
+        if imgui.button("collected##ign" .. i) then
+            ignore_poi(p.id)
+        end
 
         shown = shown + 1
+    end
+
+    -- ── collected (ignored) section ───────────────────────────────────────
+    local ign_count = #nearby_ign
+
+    imgui.separator()
+
+    -- Toggle line: show count even when section is hidden
+    local ign_label
+    if ign_count == 0 then
+        ign_label = "Collected (none in range)"
+    elseif ign_count == 1 then
+        ign_label = "Collected (1 hidden)"
+    else
+        ign_label = string.format("Collected (%d hidden)", ign_count)
+    end
+
+    local si, c6 = imgui.checkbox(ign_label, show_ignored_section)
+    if c6 then
+        show_ignored_section = si
+        farever.store.set("show_ignored", si)
+    end
+
+    if show_ignored_section and ign_count > 0 then
+        imgui.separator()
+
+        -- "Uncheck All" shortcut
+        if imgui.button("< Uncheck All") then
+            for _, p in ipairs(nearby_ign) do
+                unignore_poi(p.id)
+            end
+        end
+        imgui.separator()
+
+        for i, p in ipairs(nearby_ign) do
+            if i > MAX_ROWS then
+                imgui.text_colored(0.45, 0.45, 0.45, 1.0,
+                    string.format("  ... %d more collected", ign_count - MAX_ROWS))
+                break
+            end
+
+            -- [↩] de-ignore button
+            if imgui.button("x##unign" .. i) then
+                unignore_poi(p.id)
+            end
+            imgui.same_line()
+
+            -- Dimmed row (grayed out)
+            local line = string.format("  %-22s %5.0fm %+6.1fm",
+                p.label:sub(1, 22), p.xyd, p.dz)
+            imgui.text_colored(0.42, 0.42, 0.42, 1.0, line)
+        end
     end
 
     -- ── footer ────────────────────────────────────────────────────────────
