@@ -23,6 +23,31 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
   audible warnings, which is enough to build boss-helper plugins.
   See [plugin authoring guide](data/plugins/README.md).
 
+## Status (May 2026)
+
+The latest Farever game patch has made it much harder than usual to
+keep the mod stable. The hooking surface we rely on has become
+extremely sensitive to anything that touches it during the game's
+network sync windows, and the existing v0.5.6.x and v0.4.16 builds
+both crash for some users (issues #41, #42, #43).
+
+We are actively working on a new stable build. Progress so far:
+
+* The original `DX12Driver.present` access violation from the v0.5.x
+  series has a confirmed cause and is being addressed.
+* The minimum viable build (minimap only, no DPS, no target tracking)
+  still has stability issues we are investigating.
+* DPS meter, target tracking, cast bar and the damage planner will
+  almost certainly be reduced or absent in the next release while we
+  rebuild them on a safer foundation.
+
+There is no ETA yet. If the current releases are crashing for you,
+the most reliable option for now is to play without the mod and
+follow this repository for updates. If you have an open issue we
+will post there as soon as we have something to test.
+
+Thanks for the patience while we work through this.
+
 ## Which release do I download?
 
 There are two parallel builds on the [Releases page](../../releases).
