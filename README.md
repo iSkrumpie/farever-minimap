@@ -274,13 +274,15 @@ is the fastest way to narrow the cause.
   built-in FPS counter instead, which is much more compatible with
   composition overlays.
 
-* **Native-resolution exclusive fullscreen bypasses the overlay.**
-  Side-effect of how DWM presents to the display: in exclusive
-  fullscreen the game's swap chain flips straight to the GPU
-  scanout and DWM is not in the loop, so our composition layer is
-  invisible. Use borderless windowed instead. Most monitor + GPU
-  combos run borderless at essentially the same framerate as
-  exclusive these days.
+* **Native-resolution exclusive fullscreen bypasses the overlay
+  (v0.6.x only).** Side-effect of how DWM presents to the display:
+  in exclusive fullscreen the game's swap chain flips straight to
+  the GPU scanout and DWM is not in the loop, so our composition
+  layer is invisible. Use borderless windowed instead. Most monitor
+  + GPU combos run borderless at essentially the same framerate as
+  exclusive these days. The v0.4.17 legacy build doesn't have this
+  problem because it renders directly into the game's own swap
+  chain, no composition layer involved.
 
 * **Holding ALT plus left mouse button on an overlay window can
   trigger auto-attack when ALT is released**
@@ -293,11 +295,12 @@ is the fastest way to narrow the cause.
   the overlay with F7 while playing actively and toggle it back on
   when you want to read the minimap or DPS numbers.
 
-* **Big monitors (4K and up) need a UI scale bump.** Default text
-  size is tuned for 1080p / 1440p. On 4K + large display open the
-  filter tablet (funnel button on the minimap bezel) and use the
-  "UI scale (text)" slider, 2.0x to 2.5x is usually right for
-  a 48 inch 4K display.
+* **Big monitors (4K and up) need a UI scale bump (v0.6.x only).**
+  Default text size is tuned for 1080p / 1440p. On 4K + large display
+  open the filter tablet (funnel button on the minimap bezel) and use
+  the "UI scale (text)" slider, 2.0x to 2.5x is usually right for
+  a 48 inch 4K display. The v0.4.17 legacy build doesn't carry the
+  scale slider, so on 4K the v0.4.17 UI will be small.
 
 * **Alt-tab game crash since the v0.1.5.25921 patch.** Some users
   hit an access violation in the game's own DX12 renderer
@@ -314,6 +317,16 @@ is the fastest way to narrow the cause.
   flags (drop empty files of those names into your Farever folder
   next to `dinput8.dll`, restart). Filed upstream as a game-side
   issue; nothing we can fix from the mod's side directly.
+
+* **Proton / Steam Play (Linux) currently untested**
+  ([#45](https://github.com/ramisotti13-eng/farever-minimap/issues/45)).
+  The v0.6.x rendering path uses DirectComposition through DXGI, which
+  is the part of the Windows graphics stack Proton's wined3d / vkd3d
+  shims cover least completely. No-one has reported a working setup
+  yet. The v0.4.17 legacy build is the more likely candidate to work
+  under Proton because it sticks to the game's own swap chain and
+  skips the composition layer entirely, but it's also unconfirmed. If
+  you try it on Proton, please attach `farever-mod.log` to that issue.
 
 * **Changing in-game resolution crashes the game** (v0.6.0). The
   overlay's swap chain doesn't survive the burst of `WM_SIZE`
