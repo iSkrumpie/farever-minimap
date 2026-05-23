@@ -55,16 +55,18 @@ Pick once and stick with it.
 
 * **[v0.6.0](../../releases/latest)**: the default. The stable
   rewrite of v0.5.x. Use this unless your machine cannot run it.
-* **[v0.4.16](../../releases/tag/v0.4.16)**: frozen legacy build for
-  users where v0.6.x cannot get the overlay up. This mostly hits
-  older AMD cards with the MPO bug, very old Windows builds, or
-  unusual driver configurations. v0.4.x renders directly into the
-  game's swap chain and avoids the DirectComposition path entirely,
-  which dodges that whole class of problem. v0.4.16 is a refresh of
-  v0.4.15 against game v0.1.5.25921; feature set is much smaller (no
-  DPS meter, no plugins, no collectibles).
+* **[v0.4.17](../../releases/tag/v0.4.17)**: legacy build for users
+  where v0.6.x cannot get the overlay up. This mostly hits older AMD
+  cards with the MPO bug, very old Windows builds, or unusual driver
+  configurations. v0.4.x renders directly into the game's swap chain
+  and avoids the DirectComposition path entirely, which dodges that
+  whole class of problem. v0.4.17 ports the same HL-GC-invisible
+  worker stability fix from v0.6.0 onto the v0.4.x rendering path, so
+  this branch is up to date with the post-patch game. Feature set is
+  much smaller (DPS meter and minimap only; no plugins, no
+  collectibles, no Lua API).
 
-| Feature                              | v0.6.0                        | v0.4.16                              |
+| Feature                              | v0.6.0                        | v0.4.17                              |
 | ------------------------------------ | ----------------------------- | ------------------------------------ |
 | Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
 | Loot tracker window                  | Yes                           | No                                   |
@@ -75,7 +77,7 @@ Pick once and stick with it.
 | Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
 | Stable on post-patch game            | Yes                           | Yes                                  |
 
-If v0.6.0 does not bring up the overlay on your machine, try v0.4.16
+If v0.6.0 does not bring up the overlay on your machine, try v0.4.17
 before opening an issue. If neither works, then open the issue and
 attach `farever-mod.log` from your Farever folder.
 
@@ -250,7 +252,7 @@ Farever folder when this happens:
 `farever-fix-amd-overlay.reg` (double-click, accept the prompt,
 reboot), `farever-undo-amd-overlay-fix.reg` (rollback), and
 `OVERLAY_NOT_WORKING.txt` (plain-English step-by-step). If the .reg
-trick does not bring it up either, switch to the v0.4.16 legacy
+trick does not bring it up either, switch to the v0.4.17 legacy
 build linked above.
 
 If the game crashes after a while, please zip the `farever-mod.log`
@@ -309,9 +311,9 @@ is the fastest way to narrow the cause.
   hide the overlay (default F7) before alt-tabbing, switch to
   borderless windowed if you are in exclusive fullscreen, or try
   the opt-in `data/fg_detach.flag` and `data/cursor_park.flag`
-  workarounds documented in the v0.5.6 release notes. Filed
-  upstream as a game-side issue; nothing we can fix from the mod's
-  side directly.
+  flags (drop empty files of those names into your Farever folder
+  next to `dinput8.dll`, restart). Filed upstream as a game-side
+  issue; nothing we can fix from the mod's side directly.
 
 * **Changing in-game resolution crashes the game** (v0.6.0). The
   overlay's swap chain doesn't survive the burst of `WM_SIZE`
@@ -320,82 +322,6 @@ is the fastest way to narrow the cause.
   crashes a fraction of a second later. Workaround: quit to the
   launcher before changing resolution, then restart Farever. Fix
   planned for v0.6.1.
-
-## What's new in 0.6.0
-
-A stability-first rewrite of how the mod reads game state. If you
-were on v0.5.6.1 and hitting the recurring `DX12Driver.present`
-crash, this release is for you.
-
-The user-visible change is just "it stops crashing mid-session".
-Under the hood the read path is structurally different:
-
-* **Background reader thread.** Hero position, target tracking, cast
-  timing and damage decoding all run on the mod's own thread at
-  20 Hz, not on the game's render thread. That thread is deliberately
-  not registered with the game's garbage collector, so the game's
-  stop-the-world synchronization never waits on us, which is the
-  pattern that was producing the mid-session crash.
-* **Own UID registry.** The mod no longer asks the game's network
-  serializer to resolve target UIDs at read time. Instead it builds
-  its own `uid → entity` map from new-entity allocations, with
-  per-pointer type-tag verification so dead entries can't surface a
-  stale pointer.
-* **Alloc-context icon resolution.** First-sight skill icons are now
-  resolved on the game's main thread (during a damage event) and
-  cached. The reader thread just looks up the cache, never touches
-  the dispatch path that v0.5 was racing on.
-
-Feature behaviour is the same as v0.5.6.1. Same minimap, same DPS
-meter, same plugin runtime, same hotkeys. Layout and persisted files
-(`farever_layout.ini`, `ui_state.json`, `keybinds.json`,
-`poi_done.json`, `data/plugins/`) are untouched.
-
-To revert to the v0.5.6.1 Present-driven path (unstable but legacy),
-drop an empty `data/no_worker.flag` next to your `dinput8.dll` and
-restart Farever.
-
-Known issue: changing in-game resolution while the mod is loaded can
-crash the game (see Compatibility notes). Fix planned for v0.6.1.
-
-## What's new in 0.5.6
-
-A plugin-author release. Big API surface bump that makes boss-helper, gear-inspector, HUD and navigation-arrow plugins buildable from Lua without further DLL work. If you don't write plugins, the only user-visible change is the **mouse-park** below; everything else is API-only and silent for everyone else.
-
-For plugin authors:
-
-* **Equipment + statuses + weapon read surface**. `farever.player.weapon_kind() / .weapon_level() / .weapon_upgrade()` for the currently-equipped weapon, `farever.player.equipment()` for the full loadout array, `farever.player.statuses()` for the active buffs/debuffs list. Plus a `weapon_changed` event that fires on each swap. Enough for per-weapon personal bests, gear inspectors, build-snapshot tooling.
-* **Target defense getters**. `farever.target.armor() / .magic_armor() / .magic_reduction()`. Currently base-only because the live final values live in a MapData side-channel we don't decode yet, but the slot is reserved.
-* **Animation surface**. `farever.now()` monotonic clock, `imgui.font_scale`, `imgui.cursor_pos`, `imgui.dummy`, and `imgui.draw_rect / draw_rect_filled / draw_circle / draw_circle_filled / draw_line / draw_text / draw_triangle / draw_triangle_filled` for custom HUD pieces (cast bars, telegraph circles, blinking alerts, navigation arrows).
-* **Reference plugins** in [`examples/plugins/`](examples/plugins/): `api_inspector.lua` (living doc of every getter), `damage_planner.lua` (in-game Aragon PvE damage calculator with two-build comparison), `animation_demo.lua` (every draw primitive in one panel), `nav_arrow.lua` (tilting 3D-look waypoint arrow).
-* **Community-plugins folder** at [`community-plugins/`](community-plugins/) for user-submitted Lua plugins, with attribution headers and a submission process. First entry is `poi_height-by-iskrumpie.lua` from [#36](https://github.com/ramisotti13-eng/farever-minimap/issues/36).
-
-The user-visible change:
-
-* **Mouse-park**. When the game has the cursor invisible (camera mode after an ALT toggle) the overlay used to still register hovers from the invisible cursor drifting over its widgets. v0.5.6 overrides ImGui's notion of the mouse to off-screen while the OS cursor is hidden, so widgets stop pretending you're touching them. Active by default, no flag needed. Does not touch the OS cursor itself: the physical cursor keeps moving normally, only the overlay's hover state is suppressed.
-
-Two **opt-in workaround flags** for users hitting the alt-tab game crash (see Compatibility notes below): drop `data/cursor_park.flag` to clip the OS cursor to a 1-pixel box at center while invisible (heavier hand on the cursor, may interact with the game's wndproc), and `data/fg_detach.flag` to auto-detach our DCOMP visual during long foreground losses. Both are off by default; both hot-reload at ~2 Hz so you can toggle them without restarting.
-
-## Older releases
-
-The per-release notes on the [Releases page](../../releases) carry
-the full history. Highlights:
-
-* **0.5.6.1**: `farever.pois()` Lua API for plugin POI access.
-* **0.5.5**: game v0.1.5.25921 offset-shift compat + square minimap
-  option.
-* **0.5.4**: plugin API for target tracking + cast bar
-  (`farever.target.*`, `target_changed` / `cast_start` / `cast_end`
-  events, `farever.sound()`).
-* **0.5.3**: Lua plugin system, Present1 + dirty-rect FPS fix
-  ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)),
-  HWND re-validation for AMD configurations
-  ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29),
-  [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)).
-* **0.5**: own-window DCOMP overlay (architectural rewrite from the
-  v0.4 in-swap-chain rendering).
-* **0.4**: minimap + DPS meter, the original release line. v0.4.16
-  remains the legacy fallback for AMD MPO / old-Windows users.
 
 ## Notes
 
