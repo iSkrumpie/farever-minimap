@@ -342,7 +342,7 @@ Community plugins in [`community-plugins/`](community-plugins/) are
 written and shared by players of the mod:
 
 * [@iSkrumpie](https://github.com/iSkrumpie) — POI finder, PvE damage calculator, item finder
-* [@KaareGravesen](https://github.com/KaareGravesen) — mob codex checker
+* [Ooshraxa](https://github.com/KaareGravesen) — mob codex checker
 
 Thanks for sharing your work. Want your plugin listed here? See the
 [community-plugins README](community-plugins/README.md).

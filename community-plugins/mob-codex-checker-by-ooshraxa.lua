@@ -1,6 +1,6 @@
 -- ==============================================================
--- mob-codex-checker-by-kaaregravesen.lua
--- Submitted by @KaareGravesen  (https://github.com/ramisotti13-eng/farever-minimap/issues/44)
+-- mob-codex-checker-by-ooshraxa.lua
+-- Submitted by Ooshraxa (GitHub @KaareGravesen)  (https://github.com/ramisotti13-eng/farever-minimap/issues/44)
 -- Tested against farever-mod v0.6.3
 -- License: MIT
 --
